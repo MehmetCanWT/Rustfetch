@@ -202,7 +202,26 @@ pub fn is_discrete_gpu(class: &str, vendor: &str) -> bool {
     is_discrete_gpu_detailed("", class, vendor, "")
 }
 
+/// Decides whether a GPU is discrete, gathering dedicated VRAM as evidence
+/// when a PCI slot is available.
 pub fn is_discrete_gpu_detailed(slot: &str, class: &str, vendor: &str, name: &str) -> bool {
+    let vram = if slot.trim().is_empty() {
+        None
+    } else {
+        detect_vram_bytes(slot)
+    };
+    classify_gpu(class, vendor, name, vram)
+}
+
+/// Pure GPU classification: class/vendor/name plus optional dedicated VRAM.
+///
+/// An unknown AMD 0x0300 device defaults to Integrated, because a wrong
+/// "Discrete" label would make the dgpu module claim an APU. Positive
+/// discrete evidence is either a known dGPU name or more than 1 GiB of
+/// dedicated VRAM (mem_info_vram_total).
+pub fn classify_gpu(class: &str, vendor: &str, name: &str, vram_bytes: Option<u64>) -> bool {
+    const GIB: u64 = 1024 * 1024 * 1024;
+
     let class_clean = class.trim();
     if class_clean.starts_with("0x0302")
         || class_clean.to_ascii_lowercase().contains("3d controller")
@@ -213,7 +232,7 @@ pub fn is_discrete_gpu_detailed(slot: &str, class: &str, vendor: &str, name: &st
     let vendor_clean = vendor.trim().trim_start_matches("0x").to_ascii_lowercase();
     let name_lower = name.to_ascii_lowercase();
 
-    // NVIDIA is always discrete
+    // NVIDIA PCI display controllers are discrete.
     if vendor_clean == "10de"
         || name_lower.contains("nvidia")
         || name_lower.contains("geforce")
@@ -223,55 +242,35 @@ pub fn is_discrete_gpu_detailed(slot: &str, class: &str, vendor: &str, name: &st
         return true;
     }
 
-    // Intel Arc / Iris Xe MAX / discrete Xe
+    // Intel Arc / Iris Xe MAX / discrete Xe are the only Intel dGPUs.
     if vendor_clean == "8086" || name_lower.contains("intel") {
-        if name_lower.contains("arc ")
+        return name_lower.contains("arc ")
             || name_lower.contains("arc(tm)")
             || name_lower.contains("arc pro")
             || name_lower.contains("iris xe max")
             || name_lower.contains("dg1")
             || name_lower.contains("dg2")
             || name_lower.contains("battlemage")
-            || name_lower.contains("alchemist")
-        {
-            return true;
-        }
-        return false;
+            || name_lower.contains("alchemist");
     }
 
     // AMD / ATI
     if vendor_clean == "1002" || name_lower.contains("amd") || name_lower.contains("radeon") {
-        // Check hwmon in1_input: APU indicator
-        if !slot.is_empty() {
-            let canon = canonicalize_pci_slot(slot);
-            let pci_path = std::path::Path::new("/sys/bus/pci/devices").join(&canon);
-            if is_amd_apu_hwmon(&pci_path) {
-                return false;
-            }
-        }
-
-        // Known APU names
         if is_amd_apu_name(&name_lower) {
             return false;
         }
-
-        // Known discrete names
         if is_amd_discrete_name(&name_lower) {
             return true;
         }
-
-        // On laptops, check if runtime status exists or suspended
-        if !slot.is_empty() && detect_runtime_status(slot).is_some() {
+        if vram_bytes.is_some_and(|vram| vram > GIB) {
             return true;
         }
-
-        // Desktop AMD graphics controllers with 0x0300 (VGA) that are not APUs are discrete
-        if !name_lower.is_empty() && !name_lower.contains("integrated") {
-            return true;
-        }
+        // Unknown AMD 0x0300 device: default to Integrated.
+        return false;
     }
 
-    false
+    // Unknown vendor: dedicated VRAM above 1 GiB is the only positive evidence.
+    vram_bytes.is_some_and(|vram| vram > GIB)
 }
 
 pub fn is_amd_apu_hwmon(pci_device_path: &std::path::Path) -> bool {
@@ -299,6 +298,10 @@ pub fn is_amd_apu_name(name_lower: &str) -> bool {
         || name_lower.contains("radeon 740m")
         || name_lower.contains("radeon 760m")
         || name_lower.contains("radeon 780m")
+        || name_lower.contains("radeon 610m")
+        || name_lower.contains("radeon 820m")
+        || name_lower.contains("radeon 840m")
+        || name_lower.contains("radeon 860m")
         || name_lower.contains("radeon 880m")
         || name_lower.contains("radeon 890m")
         || name_lower.contains("renoir")
@@ -320,6 +323,8 @@ pub fn is_amd_apu_name(name_lower: &str) -> bool {
         || name_lower.contains("beema")
         || name_lower.contains("mullins")
         || name_lower.contains("apu")
+        || name_lower.contains("vega series")
+        || name_lower.contains("integrated")
         || (name_lower.contains("radeon graphics") && !name_lower.contains("rx "))
 }
 
@@ -374,6 +379,10 @@ pub fn format_vram(bytes: u64) -> String {
 }
 
 pub fn detect_vram(slot: &str) -> Option<String> {
+    detect_vram_bytes(slot).map(format_vram)
+}
+
+pub fn detect_vram_bytes(slot: &str) -> Option<u64> {
     let canon_slot = canonicalize_pci_slot(slot);
 
     // 1. Direct path under PCI device: /sys/bus/pci/devices/<slot>/mem_info_vram_total
@@ -383,7 +392,7 @@ pub fn detect_vram(slot: &str) -> Option<String> {
     if let Ok(bytes_str) = fs::read_to_string(&direct_pci) {
         if let Ok(bytes) = bytes_str.trim().parse::<u64>() {
             if bytes > 0 {
-                return Some(format_vram(bytes));
+                return Some(bytes);
             }
         }
     }
@@ -413,7 +422,7 @@ pub fn detect_vram(slot: &str) -> Option<String> {
                     if let Ok(bytes_str) = fs::read_to_string(&vram_path) {
                         if let Ok(bytes) = bytes_str.trim().parse::<u64>() {
                             if bytes > 0 {
-                                return Some(format_vram(bytes));
+                                return Some(bytes);
                             }
                         }
                     }

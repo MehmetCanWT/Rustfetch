@@ -1,5 +1,6 @@
+use crate::proc::{run_with_timeout, OPTIONAL_SOURCE_TIMEOUT};
 use crate::{Info, Module};
-use std::process::Command;
+use std::fs;
 
 pub struct Sound;
 
@@ -16,10 +17,8 @@ impl Module for Sound {
         if let Some(vol) = get_wpctl_volume() {
             return Some(Info::new("Sound", vol));
         }
-        if let Some(card) = get_asound_card() {
-            return Some(Info::new("Sound", card));
-        }
-        None
+        let card = parse_asound_cards(&fs::read_to_string("/proc/asound/cards").ok()?)?;
+        Some(Info::new("Sound (card)", card))
     }
 }
 
@@ -36,30 +35,37 @@ pub fn parse_wpctl_output(output: &str) -> Option<String> {
     }
 }
 
-fn get_wpctl_volume() -> Option<String> {
-    let output = Command::new("wpctl")
-        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
-        .output()
-        .ok()?;
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        parse_wpctl_output(&text)
-    } else {
-        None
-    }
-}
-
-fn get_asound_card() -> Option<String> {
-    let content = std::fs::read_to_string("/proc/asound/cards").ok()?;
+/// Parses the first entry of /proc/asound/cards into its card description.
+///
+/// Sample line:
+///   0 [PCH            ]: HDA-Intel - HDA Intel PCH
+/// The driver token (HDA-Intel) contains a dash of its own, so the split must
+/// happen on the " - " separator and not on the first dash.
+pub fn parse_asound_cards(content: &str) -> Option<String> {
     for line in content.lines() {
-        if let Some((_, right)) = line.split_once("]:") {
-            let desc = right.split('-').nth(1).unwrap_or(right).trim();
-            if !desc.is_empty() {
-                return Some(desc.to_string());
+        if let Some((_, right)) = line.split_once("]: ") {
+            if let Some((_, desc)) = right.split_once(" - ") {
+                let desc = desc.trim();
+                if !desc.is_empty() {
+                    return Some(desc.to_string());
+                }
             }
         }
     }
     None
+}
+
+fn get_wpctl_volume() -> Option<String> {
+    let output = run_with_timeout(
+        "wpctl",
+        &["get-volume", "@DEFAULT_AUDIO_SINK@"],
+        OPTIONAL_SOURCE_TIMEOUT,
+    )?;
+    if output.success() {
+        parse_wpctl_output(&output.stdout_string())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -79,5 +85,26 @@ mod tests {
             Some("100% [MUTED]".into())
         );
         assert_eq!(parse_wpctl_output("Invalid"), None);
+    }
+
+    #[test]
+    fn test_parse_asound_cards_hda() {
+        let content = " 0 [NVidia         ]: HDA-Intel - HDA NVidia\n                      HDA NVidia at 0x53000000 irq 17\n";
+        assert_eq!(parse_asound_cards(content), Some("HDA NVidia".into()));
+    }
+
+    #[test]
+    fn test_parse_asound_cards_usb() {
+        let content = " 1 [Device         ]: USB-Audio - Plantronics Blackwire 3220\n";
+        assert_eq!(
+            parse_asound_cards(content),
+            Some("Plantronics Blackwire 3220".into())
+        );
+    }
+
+    #[test]
+    fn test_parse_asound_cards_empty() {
+        assert_eq!(parse_asound_cards(""), None);
+        assert_eq!(parse_asound_cards("--- no soundcards ---\n"), None);
     }
 }

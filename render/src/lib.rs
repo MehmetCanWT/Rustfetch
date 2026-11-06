@@ -10,7 +10,8 @@ pub mod three_d;
 pub use braille::{render_braille, render_braille_ex};
 pub use color::{
     apply_gradient_to_text, extract_color_palette, extract_dominant_and_palette,
-    extract_dominant_color, get_theme, interpolate_color, interpolate_gradient, parse_color, Theme,
+    extract_dominant_color, get_theme, interpolate_color, interpolate_gradient, parse_color,
+    theme_names, Theme, THEME_NAMES,
 };
 pub use image::{
     apply_image_background_to_lines, apply_image_background_to_lines_ex, fit_dimensions,
@@ -30,6 +31,11 @@ pub fn render_image_ex(
     target_cols: usize,
     max_rows: Option<usize>,
 ) -> Option<(usize, usize)> {
+    // These APIs emit raw kitty graphics escape sequences, so silently do
+    // nothing unless the terminal actually speaks the protocol.
+    if !terminal::supports_kitty() {
+        return None;
+    }
     image::render_ex(path, target_cols, max_rows)
 }
 
@@ -41,6 +47,9 @@ pub fn render_image_positioned(
     h_pad: usize,
     clear_before_emit: bool,
 ) -> Option<(usize, usize)> {
+    if !terminal::supports_kitty() {
+        return None;
+    }
     image::render_positioned(
         path,
         target_cols,

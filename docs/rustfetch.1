@@ -1,4 +1,4 @@
-.TH RUSTFETCH 1 "October 2026" "rustfetch 0.1.4" "User Commands"
+.TH RUSTFETCH 1 "November 2026" "rustfetch 0.1.5" "User Commands"
 .SH NAME
 rustfetch, rfetch \- blazing-fast, memory-safe system information fetch tool
 .SH SYNOPSIS
@@ -8,145 +8,260 @@ rustfetch, rfetch \- blazing-fast, memory-safe system information fetch tool
 .B rfetch
 [\fIOPTIONS\fR]
 .SH DESCRIPTION
-\fBRustFetch\fR is a lightweight, ultra-fast system information tool written in pure Rust.
-Designed as a memory-safe, zero-fork alternative to Neofetch and Fastfetch, it gathers
-system telemetry directly from Linux kernel interfaces (\fB/proc\fR and \fB/sys\fR) without
-spawning shell sub-processes.
+\fBRustFetch\fR is a lightweight, fast system information tool written in pure Rust.
+Designed as a memory-safe alternative to Neofetch and Fastfetch, its core telemetry is
+gathered directly from Linux kernel interfaces (\fB/proc\fR, \fB/sys\fR, and stat
+syscalls) without spawning shell sub-processes.
+.PP
+Collectors that have no kernel interface may invoke bounded external tools: package
+manager fallbacks (for example \fBrpm\fR), the GitHub update check (\fBcurl\fR or
+\fBwget\fR), and the optional sound, Wi-Fi, Bluetooth, and media modules (\fBwpctl\fR,
+\fBnmcli\fR/\fBiw\fR/\fBiwgetid\fR, \fBbluetoothctl\fR, \fBplayerctl\fR). Those calls
+are timeout-bounded and skipped when the tool is absent.
 .PP
 The executable is also available under the alias \fBrfetch\fR.
 .SH OPTIONS
-.TP
-.BR \-\-preset " \fINAME\fR"
-Apply a built-in layout and formatting preset. Available presets:
-.RS
-.IP \(bu 2
-\fBdefault\fR: Standard clean view with auto-detected distro ASCII logo.
-.IP \(bu 2
-\fBcard\fR: Rounded border card container with centered ASCII art.
-.IP \(bu 2
-\fBminimal\fR: Compact hardware view without ASCII art or icons.
-.IP \(bu 2
-\fBmodern\fR: Dot separator with colorful section banners.
-.IP \(bu 2
-\fBcompact\fR: Terse key-value layout with short labels.
-.RE
-.TP
-.BR \-\-benchmark
-Run execution profiler measuring microsecond-level latency per telemetry module.
-.TP
-.BR \-c ", " \-\-config " \fIPATH\fR"
-Path to custom TOML configuration file (defaults to \fI~/.config/rustfetch/config.toml\fR).
-.TP
-.BR \-i ", " \-\-image " \fIPATH\fR"
-Render an image instead of ASCII art using the Kitty Graphics Protocol.
-.TP
-.BR \-l ", " \-\-logo " \fINAME\fR"
-Override ASCII logo (e.g., \fIarch\fR, \fIubuntu\fR, \fIfedora\fR, \fIdebian\fR, \fIvoid\fR, \fIalpine\fR, \fInixos\fR, \fIgentoo\fR, etc.).
-.TP
-.BR \-\-color " \fICOLOR\fR"
-Override primary theme color (e.g., \fIcyan\fR, \fIblue\fR, \fIgreen\fR, \fIred\fR, \fIyellow\fR, \fImagenta\fR, \fIwhite\fR, or hex \fI#33aadd\fR).
-.TP
-.BR \-\-align " \fIALIGN\fR"
-Set layout alignment: \fIleft\fR, \fIright\fR, or \fIcenter\fR.
-.TP
-.BR \-\-center
-Shortcut to horizontally center both logo and system information in terminal.
-.TP
-.BR \-\-json
-Output system information in structured JSON format.
-.TP
-.BR \-\-live
-Run in continuous real-time monitor mode with live metrics update.
-.TP
-.BR \-\-dump\-config
-Print current active configuration to stdout.
-.TP
-.BR \-\-generate\-config
-Generate default \fIconfig.toml\fR file in \fI~/.config/rustfetch/\fR.
-.TP
-.BR \-\-import\-fastfetch
-Import existing Fastfetch configuration and convert it into RustFetch TOML format.
-.TP
-.BR \-\-completions " \fISHELL\fR"
-Generate shell auto-completion script for \fIbash\fR, \fIzsh\fR, or \fIfish\fR.
+.SS General and output
 .TP
 .BR \-h ", " \-\-help
 Print help information.
 .TP
 .BR \-V ", " \-\-version
-Print version information.
+Print version information, including the cat-breed codename.
+.TP
+.BR \-c ", " \-\-config " \fIPATH\fR"
+Load configuration from \fIPATH\fR instead of the XDG discovery path.
+.TP
+.BR \-\-json
+Output system information as structured JSON.
+.TP
+.BR \-\-waybar
+Output a single-line Waybar/Polybar JSON object.
+.TP
+.BR \-\-format " \fIFORMAT\fR"
+Select the output format: \fIwaybar\fR or \fIjson\fR.
+.TP
+.BR \-\-benchmark
+Run an execution profiler that reports microsecond-level latency per collector.
+.TP
+.BR \-\-live
+Run the continuous live monitor with CPU and RAM sparklines and hot theme/border keys.
+.TP
+.BR \-\-clear ", " \-C
+Clear the terminal screen and scrollback before drawing.
+.TP
+.BR \-\-center
+Horizontally center the output in the terminal.
+.TP
+.BR \-\-separator " \fISEP\fR"
+Override the delimiter between label/icon and value.
+.TP
+.BR \-\-icon-only
+Hide text labels and print only icons and values.
+.TP
+.BR \-\-color " \fICOLOR\fR"
+Override the module/key color (a color name such as \fIcyan\fR or a hex value such as \fI#33aadd\fR).
+.SS Layout and logo
+.TP
+.BR \-\-preset " \fINAME\fR"
+Apply a built-in layout preset. Available presets: \fBdefault\fR, \fBminimal\fR,
+\fBclean\fR, \fBdots\fR, \fBcard\fR, \fBbrackets\fR, \fBneofetch\fR, \fBretro\fR,
+\fBmodern\fR, and \fBcompact\fR.
+.TP
+.BR \-\-theme " \fINAME\fR"
+Apply one of the 13 built-in color themes (see \fB\-\-list\-themes\fR).
+.TP
+.BR \-l ", " \-\-logo " \fIDISTRO\fR"
+Override the built-in ASCII logo (for example \fIarch\fR, \fIubuntu\fR, \fIfedora\fR,
+\fIvoid\fR, or a cat mascot). Run \fB\-\-list\-logos\fR for all keys.
+.TP
+.BR \-i ", " \-\-image " \fIPATH\fR"
+Render an image logo instead of ASCII art.
+.TP
+.BR \-\-no\-logo
+Disable the logo completely.
+.TP
+.BR \-\-logo\-position " \fIPOSITION\fR"
+Placement of the logo. ASCII logos support \fIleft\fR, \fIright\fR, \fItop\fR,
+\fIbottom\fR, and \fIbehind\fR. Image logos support \fIleft\fR (default), \fItop\fR, and
+\fIbehind\fR; requesting \fIright\fR or \fIbottom\fR with an image prints a warning and
+falls back to \fIleft\fR.
+.TP
+.BR \-\-protocol " \fIPROTOCOL\fR"
+Image protocol: \fIauto\fR, \fIkitty\fR, \fIsixel\fR, \fIiterm\fR, or \fIhalfblock\fR.
+.TP
+.BR \-\-width " \fICOLS\fR"
+Image or 3D canvas width in terminal columns.
+.TP
+.BR \-\-height " \fIROWS\fR"
+Image or 3D canvas height in terminal rows.
+.TP
+.BR \-\-ascii " \fIPATH\fR"
+Use a custom static ASCII art file as the logo.
+.TP
+.BR \-\-border
+Enable the decorative box container.
+.TP
+.BR \-\-border\-style " \fISTYLE\fR"
+Box style: \fIrounded\fR, \fIlight\fR, \fIheavy\fR, \fIdouble\fR, \fIdashed\fR,
+\fIblock\fR, \fIascii\fR, or \fIbrackets\fR.
+.TP
+.BR \-\-border\-color " \fICOLOR\fR"
+Border color (name or hex value).
+.TP
+.BR \-\-border\-title " \fITITLE\fR"
+Title embedded in the top border line.
+.TP
+.BR \-\-border\-image " \fIPATH\fR"
+Use an image file as a decorative border/frame.
+.TP
+.BR \-\-border\-image\-width " \fICOLS\fR"
+Column width of the border image.
+.TP
+.BR \-\-border\-image\-position " \fIPOSITION\fR"
+Border image placement: \fIbehind\fR/\fIbackground\fR, \fIleft\fR, \fIright\fR,
+\fItop\fR, \fIbottom\fR, or \fIframe\fR.
+.SS 3D engine and ASCII animation
+.TP
+.BR \-\-3d
+Enable the real-time 3D animated logo.
+.TP
+.BR \-\-speed " \fIFLOAT\fR"
+3D rotation speed (0.05 to 10).
+.TP
+.BR \-\-size " \fIFLOAT\fR"
+3D model scale (0.1 to 3.0).
+.TP
+.BR \-\-depth " \fIFLOAT\fR"
+3D relief depth (0.1 to 5).
+.TP
+.BR \-\-shading\-mode " \fIMODE\fR"
+Rasterization mode: \fIascii\fR, \fIblocks\fR, \fIsextants\fR, \fIbraille\fR,
+\fIdot\fR, \fIwireframe\fR, or \fIsolid\fR.
+.TP
+.BR \-\-shading " \fICHARS\fR"
+Custom shading character ramp.
+.TP
+.BR \-\-frames " \fIN\fR"
+Stop after \fIN\fR frames.
+.TP
+.BR \-\-fps " \fIFPS\fR"
+Target frame rate for the 3D engine or ASCII animation.
+.TP
+.BR \-\-hold
+Keep the animation running instead of exiting on the first keypress.
+.TP
+.BR \-\-exit\-on\-key
+Exit the animation on any keypress.
+.TP
+.BR \-\-infinite
+Loop the animation indefinitely.
+.TP
+.BR \-\-ascii\-anim " \fIPATH\fR"
+Play a multi-frame ASCII animation (delimiter-separated file or a frame directory).
+.SS Configuration and discovery
+.TP
+.BR \-\-dump\-config
+Print the active, merged configuration (preset + config file + CLI overrides) to stdout.
+.TP
+.BR \-\-print\-default\-config
+Print the commented default configuration template.
+.TP
+.BR \-\-generate\-config
+Write a default \fIconfig.toml\fR into \fI~/.config/rustfetch/\fR, backing up an existing file.
+.TP
+.BR \-\-import\-fastfetch
+Import an existing Fastfetch configuration and convert it to RustFetch TOML.
+.TP
+.BR \-\-list\-modules
+List all 39 supported module names.
+.TP
+.BR \-\-list\-themes
+List all 13 built-in color themes with previews.
+.TP
+.BR \-\-list\-presets
+List all 10 layout presets.
+.TP
+.BR \-\-list\-logos
+List all 38 built-in ASCII logos.
+.TP
+.BR \-\-clean\-cache
+Clear cached module data in \fI~/.cache/rustfetch\fR.
+.TP
+.BR \-\-doctor
+Run system, terminal graphics, config validity/warning, cache, and update diagnostics.
+.TP
+.BR \-\-no\-update\-check
+Skip the GitHub update check for this run (\fB\-\-doctor \-\-no\-update\-check\fR is fully offline).
+.TP
+.BR \-\-self\-update
+Update RustFetch in place from the latest GitHub release while preserving \fIconfig.toml\fR.
+.TP
+.BR \-\-setup ", " \-\-tui
+Launch the interactive configuration wizard.
+.TP
+.BR \-\-init " \fISHELL\fR"
+Print the shell startup/resize init snippet for \fIbash\fR, \fIzsh\fR, or \fIfish\fR.
+.TP
+.BR \-\-install\-hook
+Install the shell startup/resize hook as a marked block in the shell rc file.
+.TP
+.BR \-\-remove\-hook
+Remove the marked RustFetch hook block from the shell rc file.
+.TP
+.BR \-\-completions " \fISHELL\fR"
+Generate shell completions for \fIbash\fR, \fIzsh\fR, \fIfish\fR, \fIelvish\fR, or \fIpowershell\fR.
 .SH MODULES
-RustFetch supports the following modular telemetry collectors:
-.TP
-.B os
-Operating system name, distribution ID, and release from \fI/etc/os-release\fR.
-.TP
-.B kernel
-Running Linux kernel release from \fBuname(2)\fR.
-.TP
-.B uptime
-System uptime parsed from \fI/proc/uptime\fR.
-.TP
-.B packages
-Total installed package count across pacman, dpkg, rpm, flatpak, apk, xbps, nix, emerge, and snap.
-.TP
-.B shell
-Active user shell and version from \fB$SHELL\fR.
-.TP
-.B display
-Connected monitors, active resolutions, and refresh rates (parsed via EDID from \fI/sys/class/drm\fR).
-.TP
-.B de
-Desktop Environment (\fB$XDG_CURRENT_DESKTOP\fR or \fB$DESKTOP_SESSION\fR).
-.TP
-.B wm
-Window Manager (Wayland compositor or X11 WM detection).
-.TP
-.B terminal
-Terminal emulator name detected via parent process inspection.
-.TP
-.B cpu
-Processor model name, core/thread count, and maximum frequency from \fI/proc/cpuinfo\fR.
-.TP
-.B gpu
-Graphics cards detected via PCI class inspection in \fI/sys/bus/pci/devices\fR.
-.TP
-.B memory
-RAM usage and total capacity parsed directly from \fI/proc/meminfo\fR.
-.TP
-.B swap
-Swap space usage parsed from \fI/proc/meminfo\fR.
-.TP
-.B disk
-Root and mounted filesystem usage.
-.TP
-.B battery
-Battery status and charge percentage from \fI/sys/class/power_supply\fR.
-.TP
-.B sound
-Default audio sink volume and mute status via WirePlumber / PulseAudio.
-.TP
-.B wifi
-Active wireless interface SSID and signal quality percentage.
-.TP
-.B processes
-Total running process count and 1-minute load average from \fI/proc/loadavg\fR.
-.TP
-.B media
-Current MPRIS player status and playback title (optional, disabled by default).
-.TP
-.B colors
-Terminal 8-color palette preview bar.
-.TP
-.B custom
-Arbitrary user-defined text line.
+RustFetch supports 39 canonical module names, listed by \fB\-\-list\-modules\fR:
+.PP
+\fBSystem:\fR os, os_age, host, board, kernel, uptime, packages, shell, desktop, font,
+terminal, locale, processes, init, container, update, custom, break, divider.
+.PP
+\fBHardware:\fR cpu, cpu_usage, temp, gpu, dgpu, igpu, gpu_driver, memory, swap, disk,
+battery, power_profile, brightness, display.
+.PP
+\fBMedia:\fR sound, media, bluetooth.
+.PP
+\fBNetwork:\fR wifi, net_io, local_ip.
+.PP
+Notable behaviour: \fBkernel\fR reads \fI/proc/version\fR; \fBdisplay\fR parses EDID
+(header, checksum, four detailed timing descriptors, CTA-861 extensions) from
+\fI/sys/class/drm\fR; \fBnet_io\fR uses the default-route interface and reports a
+throughput rate when re-run within 10 seconds; \fBbreak\fR and \fBdivider\fR are aliases
+that draw a section divider line.
+.SH CONFIGURATION
+The TOML configuration lives at \fI~/.config/rustfetch/config.toml\fR (or
+\fI$XDG_CONFIG_HOME/rustfetch/config.toml\fR). A top-level \fBpreset\fR key selects a
+built-in preset as the base layer; explicit \fB[general]\fR and \fB[[modules]]\fR values
+override it. Unknown keys, unknown module names, unknown themes, and out-of-range values
+are clamped or ignored and reported by \fBrustfetch \-\-doctor\fR.
 .SH ENVIRONMENT
 .TP
 .B NO_COLOR
-If set to any non-empty value (regardless of content), ANSI color codes are completely disabled.
+If set to a non-empty value, ANSI color codes are disabled.
+.TP
+.BR FORCE_COLOR ", " CLICOLOR_FORCE
+When set to a non-empty value other than \fI0\fR, they override \fBNO_COLOR\fR and force colors on.
 .TP
 .B TERM
-When set to \fIdumb\fR, ANSI formatting is stripped. When set to \fIlinux\fR (Linux virtual console/TTY), TrueColor hex codes are automatically mapped to 16 standard ANSI colors for maximum readability.
+When set to \fIdumb\fR, ANSI formatting is stripped. When set to \fIlinux\fR (Linux
+virtual console), hex colors are mapped to the 16 standard ANSI colors.
+.TP
+.BR XDG_CONFIG_HOME ", " HOME
+Locate the configuration file.
+.TP
+.BR XDG_CACHE_HOME ", " HOME
+Locate the module/update cache.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Runtime failure (unreadable config, failed self-update, failed hook installation, and similar).
+.TP
+.B 2
+Usage error reported by the command-line parser.
 .SH FILES
 .TP
 .I ~/.config/rustfetch/config.toml
@@ -154,6 +269,9 @@ Main user configuration file.
 .TP
 .I ~/.config/rustfetch/logos/
 Directory for custom ASCII logo files.
+.TP
+.I ~/.cache/rustfetch/
+Cached module data and update-check metadata.
 .SH AUTHORS
 Written and maintained by Mehmet Can (\fIMehmetCanWT\fR) and contributors.
 .SH REPORTING BUGS

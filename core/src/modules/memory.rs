@@ -1,4 +1,6 @@
 use crate::{Info, Module};
+use std::fs;
+use std::path::Path;
 
 pub struct Memory;
 
@@ -19,7 +21,12 @@ fn read_meminfo() -> Option<String> {
 }
 
 fn read_zfs_arc_kb() -> u64 {
-    let Ok(arc_content) = std::fs::read_to_string("/proc/spl/kstat/zfs/arcstats") else {
+    read_zfs_arc_kb_from(Path::new("/proc/spl/kstat/zfs/arcstats"))
+}
+
+/// Reads the ZFS ARC size in KiB from an arcstats fixture.
+pub fn read_zfs_arc_kb_from(path: &Path) -> u64 {
+    let Ok(arc_content) = fs::read_to_string(path) else {
         return 0;
     };
     for line in arc_content.lines() {
@@ -57,7 +64,12 @@ pub fn parse_meminfo(content: &str) -> Option<String> {
     parse_meminfo_with_arc(content, 0)
 }
 
-fn parse_meminfo_with_arc(content: &str, zfs_arc_kb: u64) -> Option<String> {
+/// Parses /proc/meminfo, subtracting reclaimable ZFS ARC memory from "used".
+///
+/// A corrupt or swapped meminfo where MemAvailable exceeds MemTotal is treated
+/// as zero usage instead of dropping the whole row; a ZFS ARC larger than the
+/// used amount is clamped so the value never underflows.
+pub fn parse_meminfo_with_arc(content: &str, zfs_arc_kb: u64) -> Option<String> {
     let mut mem_total = None;
     let mut mem_available = None;
     let mut mem_free = None;
@@ -85,7 +97,10 @@ fn parse_meminfo_with_arc(content: &str, zfs_arc_kb: u64) -> Option<String> {
         let free = mem_free?;
         Some(free + buffers.unwrap_or(0) + cached.unwrap_or(0))
     })?;
-    let used = total.checked_sub(available)?.saturating_sub(zfs_arc_kb);
+
+    let used = total.saturating_sub(available);
+    let arc = zfs_arc_kb.min(used);
+    let used = used.saturating_sub(arc);
 
     Some(format!("{} / {}", format_kb(used), format_kb(total)))
 }
@@ -96,8 +111,6 @@ mod tests {
     use insta::assert_snapshot;
 
     /// Realistic Fedora Linux /proc/meminfo fixture.
-    /// MemTotal: 16252928 kB (~15.5 GiB)
-    /// MemAvailable: 12897485 kB (used = 3355443 kB, ~3.2 GiB)
     const FEDORA_MEMINFO: &str = r#"MemTotal:       16252928 kB
 MemFree:         2092500 kB
 MemAvailable:   12897485 kB
@@ -150,7 +163,6 @@ SecPageTables:      2056 kB
     fn test_parse_meminfo_without_memavailable() {
         let sample =
             "MemTotal: 4194304 kB\nMemFree: 1048576 kB\nBuffers: 524288 kB\nCached: 524288 kB\n";
-        // available = 1048576 + 524288 + 524288 = 2097152 kB (2.0 GiB), used = 2097152 kB (2.0 GiB)
         assert_eq!(parse_meminfo(sample), Some("2.0 GiB / 4.0 GiB".to_string()));
     }
 
@@ -159,15 +171,49 @@ SecPageTables:      2056 kB
         assert_eq!(parse_meminfo(""), None);
         assert_eq!(parse_meminfo("MemTotal: 16252928 kB"), None);
         assert_eq!(parse_meminfo("MemAvailable: 12897485 kB"), None);
-        // MemAvailable > MemTotal should safely return None without panicking
+    }
+
+    #[test]
+    fn test_available_greater_than_total_does_not_drop_row() {
         let invalid = "MemTotal: 1000 kB\nMemAvailable: 2000 kB\n";
-        assert_eq!(parse_meminfo(invalid), None);
+        assert_eq!(
+            parse_meminfo(invalid),
+            Some("0.0 MiB / 1.0 MiB".to_string())
+        );
+    }
+
+    #[test]
+    fn test_zfs_arc_is_subtracted_and_clamped() {
+        let sample = "MemTotal: 16000000 kB\nMemAvailable: 12000000 kB\n";
+        // 4 GiB used, 1 GiB ARC -> 3 GiB used
+        assert_eq!(
+            parse_meminfo_with_arc(sample, 1024 * 1024),
+            Some("2.8 GiB / 15.3 GiB".to_string())
+        );
+        // ARC larger than used must clamp to zero instead of underflowing
+        assert_eq!(
+            parse_meminfo_with_arc(sample, 8 * 1024 * 1024),
+            Some("0.0 MiB / 15.3 GiB".to_string())
+        );
+    }
+
+    #[test]
+    fn test_read_zfs_arc_kb_from_fixture() {
+        let path =
+            std::env::temp_dir().join(format!("rustfetch_meminfo_arc_{}", std::process::id()));
+        fs::write(
+            &path,
+            "name                            type data\nsize                            4    1073741824\n",
+        )
+        .unwrap();
+        assert_eq!(read_zfs_arc_kb_from(&path), 1024 * 1024);
+        let _ = fs::remove_file(&path);
+        assert_eq!(read_zfs_arc_kb_from(&path), 0);
     }
 
     #[test]
     fn test_memory_module_name() {
-        let mem = Memory;
-        assert_eq!(mem.name(), "memory");
+        assert_eq!(Memory.name(), "memory");
     }
 
     #[test]

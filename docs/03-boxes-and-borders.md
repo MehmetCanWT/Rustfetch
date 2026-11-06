@@ -128,13 +128,13 @@ rustfetch --border --border-style double --border-color "#bd93f9" --border-title
 | Style Name | Top Corners | Top/Bottom Line | Side Lines | Bottom Corners | Divider Line |
 |---|:---:|:---:|:---:|:---:|:---:|
 | `rounded` (default) | `╭` `╮` | `─` | `│` | `╰` `╯` | `├` `─` `┤` |
+| `light` (alias `single`) | `┌` `┐` | `─` | `│` | `└` `┘` | `├` `─` `┤` |
+| `heavy` (alias `thick`) | `┏` `┓` | `━` | `┃` | `┗` `┛` | `┣` `━` `┫` |
 | `double` | `╔` `╗` | `═` | `║` | `╚` `╝` | `╠` `═` `╣` |
-| `heavy` | `┏` `┓` | `━` | `┃` | `┗` `┛` | `┣` `━` `┫` |
-| `light` | `┌` `┐` | `─` | `│` | `└` `┘` | `├` `─` `┤` |
+| `dashed` (alias `dots`) | `┌` `┐` | `╌` | `┆` | `└` `┘` | `├` `╌` `┤` |
 | `ascii` | `+` `+` | `-` | `\|` | `+` `+` | `+` `-` `+` |
-| `brackets` | `⎡` `⎤` | ` ` | ` ` | `⎣` `⎦` | ` ` `─` ` ` |
-| `dots` | `·` `·` | `·` | `·` | `·` `·` | `·` `·` `·` |
-| `block` | `█` `█` | `▀` | `█` | `█` `█` | `█` `▄` `█` |
+| `brackets` | `[` `]` | `─` | `│` | `[` `]` | `[` `─` `]` |
+| `block` | `█` `█` | `▀` / `▄` | `█` | `█` `█` | `█` `▀` `█` |
 
 ---
 
@@ -143,12 +143,12 @@ rustfetch --border --border-style double --border-color "#bd93f9" --border-title
 You can define completely custom box-drawing glyphs using an 11-character string or a detailed configuration object.
 
 ### String Syntax (11 Characters)
-Order: `TL` (Top-Left), `T` (Top), `TR` (Top-Right), `L` (Left), `R` (Right), `BL` (Bottom-Left), `B` (Bottom), `BR` (Bottom-Right), `DL` (Divider-Left), `D` (Divider), `DR` (Divider-Right).
+Order: `TL` (Top-Left), `T` (Top), `TR` (Top-Right), `R` (Right), `BR` (Bottom-Right), `B` (Bottom), `BL` (Bottom-Left), `L` (Left), `DL` (Divider-Left), `D` (Divider), `DR` (Divider-Right). Exactly 11 characters are required.
 
 ```toml
 [general]
 border = true
-border_chars = "┌─┐││└─┘├─┤"
+border_chars = "┌─┐│┘─└│├─┤"
 ```
 
 ### Table Object Syntax
@@ -190,7 +190,7 @@ border_title = "Hardware"
 ```
 
 ### 2. Section Dividers (`name = "break"` / `name = "divider"`)
-Adding a `break` module inside `[[modules]]` generates an authentic internal divider line that connects seamlessly with the outer border:
+`break` and `divider` are aliases for the same module: both render an internal divider line that connects seamlessly with the outer border (they are not blank spacer rows). Adding one inside `[[modules]]` generates the divider:
 
 ```toml
 [[modules]]

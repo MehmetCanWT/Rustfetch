@@ -6,28 +6,30 @@ RustFetch features an authentic, 24-bit TrueColor rendering pipeline that operat
 
 ## 🎨 Built-in Color Themes
 
-RustFetch includes 13 production themes curated from the most popular Linux desktop ricing aesthetics:
+RustFetch includes 13 production themes curated from the most popular Linux desktop ricing aesthetics. The identifiers below are the canonical names printed by `rustfetch --list-themes` (kept in sync with `rustfetch_render::theme_names()`):
 
-| Theme Identifier | Description | Accent Color | Border Color |
+| Theme Identifier | Name | Primary | Border |
 |---|---|---|---|
-| `catppuccin-mocha` | Dark soothing pastel theme | Lavender `#cba6f7` | Mauve `#cba6f7` |
-| `catppuccin-latte` | Light pastel variant | Lavender `#7287fd` | Mauve `#8839ef` |
-| `catppuccin-macchiato` | Medium dark pastel variant | Lavender `#b7bdf8` | Mauve `#c6a0f6` |
-| `catppuccin-frappe` | Muted dark pastel variant | Lavender `#babbf1` | Mauve `#ca9ee6` |
-| `dracula` | Classic dark theme with vibrant accents | Purple `#bd93f9` | Pink `#ff79c6` |
-| `tokyo-night` | Neon Tokyo night aesthetic | Blue `#7aa2f7` | Magenta `#bb9af7` |
-| `gruvbox` | Retro warm groove theme | Yellow `#fabd2f` | Orange `#fe8019` |
-| `nord` | Arctic, north-bluish palette | Frost Cyan `#88c0d0` | Frost Blue `#81a1c1` |
-| `rose-pine` | Soho vibes with natural rose tones | Rose `#ebbcba` | Iris `#c4a7e7` |
-| `cyberpunk` | High-contrast neon cyber aesthetic | Yellow `#fcee0a` | Neon Pink `#ff007f` |
-| `monokai` | Iconic code editor theme | Green `#a6e22e` | Magenta `#f92672` |
-| `onedark` | Atom/Neovim deep dark theme | Blue `#61afef` | Purple `#c678dd` |
-| `solarized-dark` | Precision solarized palette | Cyan `#2aa198` | Blue `#268bd2` |
+| `catppuccin` | Catppuccin Mocha | Mauve `#cba6f7` | Lavender `#b4befe` |
+| `catppuccin-latte` | Catppuccin Latte | `#8839ef` | `#7287fd` |
+| `catppuccin-macchiato` | Catppuccin Macchiato | `#c6a0f6` | `#b7bdf8` |
+| `catppuccin-frappe` | Catppuccin Frappé | `#ca9ee6` | `#babbf1` |
+| `dracula` | Dracula | Purple `#bd93f9` | `#6272a4` |
+| `tokyo-night` | Tokyo Night | Blue `#7aa2f7` | `#565f89` |
+| `gruvbox` | Gruvbox Dark | Orange `#fe8019` | `#665c54` |
+| `nord` | Nord | Frost Cyan `#88c0d0` | `#4c566a` |
+| `rose-pine` | Rosé Pine | Rose `#ebbcba` | `#6e6a86` |
+| `cyberpunk` | Cyberpunk | Neon Yellow `#fcee0a` | Deep Purple `#711c91` |
+| `monokai` | Monokai | Pink `#f92672` | `#75715e` |
+| `onedark` | One Dark | Blue `#61afef` | `#5c6370` |
+| `solarized` | Solarized Dark | Blue `#268bd2` | `#586e75` |
+
+Common aliases are accepted as well (for example `catppuccin-mocha`, `mocha`, `latte`, `macchiato`, `frappe`, `tokyonight`, `gruvbox-dark`, `rosepine`, `one-dark`, and `solarized-dark`), but only the canonical identifiers are listed by `--list-themes`.
 
 ### Using a Theme
 ```bash
 # Apply a theme via CLI
-rustfetch --theme catppuccin-mocha
+rustfetch --theme catppuccin
 
 # Or combine with box borders
 rustfetch --theme dracula --border --border-style rounded

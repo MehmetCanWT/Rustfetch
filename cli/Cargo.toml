@@ -2,14 +2,15 @@
 name = "rustfetch"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
 default-run = "rustfetch"
 
 [dependencies]
-rustfetch-core = { path = "../core", version = "0.1.4" }
-rustfetch-render = { path = "../render", version = "0.1.4" }
+rustfetch-core = { path = "../core", version = "0.1.5" }
+rustfetch-render = { path = "../render", version = "0.1.5" }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { workspace = true }

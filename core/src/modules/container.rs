@@ -81,7 +81,16 @@ where
         }
     }
 
-    // 8. Flatpak / Snap sandboxes
+    // 8. LXC / LXD cgroup marker (works for non-systemd containers too)
+    for cgroup_path in ["/proc/1/cgroup", "/proc/self/cgroup"] {
+        if let Some(cgroup) = read_str(cgroup_path) {
+            if cgroup_marker(&cgroup) {
+                return Some("LXC".to_string());
+            }
+        }
+    }
+
+    // 9. Flatpak / Snap sandboxes
     if path_exists("/.flatpak-info") || env_lookup("FLATPAK_ID").is_some() {
         return Some("Flatpak".to_string());
     }
@@ -89,15 +98,22 @@ where
         return Some("Snap".to_string());
     }
 
-    // 9. WSL2 detection via kernel version string
+    // 10. WSL1 / WSL2 detection via the kernel release string
     if let Some(ver) = read_str("/proc/version") {
         let lower = ver.to_lowercase();
         if lower.contains("microsoft") || lower.contains("wsl") {
-            return Some("WSL2".to_string());
+            let release = read_str("/proc/sys/kernel/osrelease")
+                .unwrap_or_default()
+                .to_lowercase();
+            let combined = format!("{lower} {release}");
+            if is_wsl2_marker(&combined) {
+                return Some("WSL2".to_string());
+            }
+            return Some("WSL1".to_string());
         }
     }
 
-    // 10. PID 1 environment container variable
+    // 11. PID 1 environment container variable
     if let Some(environ) = read_bytes("/proc/1/environ") {
         for entry in environ.split(|&b| b == 0) {
             if let Ok(s) = std::str::from_utf8(entry) {
@@ -111,7 +127,7 @@ where
         }
     }
 
-    // 11. Virtual machine inspection via DMI
+    // 12. Virtual machine inspection via DMI
     let product = read_str("/sys/class/dmi/id/product_name").unwrap_or_default();
     let vendor = read_str("/sys/class/dmi/id/sys_vendor").unwrap_or_default();
     let combined = format!("{product} {vendor}").to_lowercase();
@@ -126,9 +142,36 @@ where
         Some("VMware".to_string())
     } else if combined.contains("bochs") {
         Some("Bochs".to_string())
+    } else if combined.contains("hyper-v")
+        || (combined.contains("microsoft") && combined.contains("virtual"))
+    {
+        Some("Hyper-V".to_string())
+    } else if combined.contains("xen") {
+        Some("Xen".to_string())
+    } else if combined.contains("parallels") {
+        Some("Parallels".to_string())
     } else {
         None
     }
+}
+
+/// True when a `/proc/*/cgroup` content indicates an LXC/LXD payload.
+fn cgroup_marker(cgroup: &str) -> bool {
+    cgroup.contains("lxc") || cgroup.contains("lxd")
+}
+
+/// Distinguishes WSL2 from WSL1 using the kernel release string.
+///
+/// WSL1 always reports a 4.4.y Microsoft kernel;
+/// WSL2 reports "standard-WSL2" (or a newer 5.x/6.x Microsoft kernel).
+fn is_wsl2_marker(combined_lowercase: &str) -> bool {
+    if combined_lowercase.contains("wsl2") {
+        return true;
+    }
+    if combined_lowercase.contains("4.4.0") {
+        return false;
+    }
+    true
 }
 
 pub fn format_runtime(name: &str) -> String {
@@ -269,5 +312,84 @@ mod tests {
             |_| None,
         );
         assert_eq!(res, Some("Rosetta".to_string()));
+    }
+
+    #[test]
+    fn test_detect_container_wsl_variants() {
+        let wsl1 = detect_container_impl(
+            |_| false,
+            |_| false,
+            |_| None,
+            |p| match p {
+                "/proc/version" => Some(
+                    "Linux version 4.4.0-19041-Microsoft (Microsoft@Microsoft.com) #1 SMP".into(),
+                ),
+                "/proc/sys/kernel/osrelease" => Some("4.4.0-19041-Microsoft".into()),
+                _ => None,
+            },
+            |_| None,
+        );
+        assert_eq!(wsl1, Some("WSL1".to_string()));
+
+        let wsl2 = detect_container_impl(
+            |_| false,
+            |_| false,
+            |_| None,
+            |p| match p {
+                "/proc/version" => Some(
+                    "Linux version 5.15.153.1-microsoft-standard-WSL2 (root@container) #1 SMP"
+                        .into(),
+                ),
+                "/proc/sys/kernel/osrelease" => Some("5.15.153.1-microsoft-standard-WSL2".into()),
+                _ => None,
+            },
+            |_| None,
+        );
+        assert_eq!(wsl2, Some("WSL2".to_string()));
+    }
+
+    #[test]
+    fn test_detect_container_lxc_cgroup() {
+        let lxc = detect_container_impl(
+            |_| false,
+            |_| false,
+            |_| None,
+            |p| match p {
+                "/proc/1/cgroup" => Some("12:pids:/lxc.payload.mycontainer\n".into()),
+                _ => None,
+            },
+            |_| None,
+        );
+        assert_eq!(lxc, Some("LXC".to_string()));
+    }
+
+    #[test]
+    fn test_detect_container_vm_types() {
+        for (vendor, product, expected) in [
+            ("Microsoft Corporation", "Virtual Machine", "Hyper-V"),
+            ("Xen", "HVM domU", "Xen"),
+            (
+                "Parallels Software International Inc.",
+                "Parallels Virtual Platform",
+                "Parallels",
+            ),
+        ] {
+            let res = detect_container_impl(
+                |_| false,
+                |_| false,
+                |_| None,
+                |p| match p {
+                    "/sys/class/dmi/id/product_name" => Some(product.to_string()),
+                    "/sys/class/dmi/id/sys_vendor" => Some(vendor.to_string()),
+                    _ => None,
+                },
+                |_| None,
+            );
+            assert_eq!(
+                res.as_deref(),
+                Some(expected),
+                "vendor={vendor} product={product}"
+            );
+        }
     }
 }

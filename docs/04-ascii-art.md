@@ -31,26 +31,26 @@ RustFetch automatically measures the maximum visual column width of your drawing
 
 Many community ASCII logos (including official Neofetch and Fastfetch distro files) use variable placeholders for colors rather than hardcoded ANSI codes. 
 
-RustFetch natively recognizes and replaces both `$N` and `${cN}` color tokens:
+RustFetch recognizes `$1`..`$9` color tokens (built-in logos use this format). Other `$` characters are preserved literally.
 
-| Token | Long Token | Default Meaning |
-|---|---|---|
-| `$1` | `${c1}` | Primary accent color |
-| `$2` | `${c2}` | Secondary accent color |
-| `$3` | `${c3}` | Tertiary color |
-| `$4` | `${c4}` | Quaternary color |
-| `$5` | `${c5}` | Highlight color |
-| `$6` | `${c6}` | Shadow / background color |
+| Token | Default Meaning |
+|---|---|
+| `$1` | Primary accent color |
+| `$2` | Secondary accent color |
+| `$3` | Tertiary color |
+| `$4` | Quaternary color |
+| `$5` | Highlight color |
+| `$6` | Shadow / background color |
 
 ### Example ASCII File (`arch_custom.txt`):
 ```text
-${c1}      /\
-${c1}     /  \
-${c1}    /\   \
-${c2}   /      \
-${c2}  /   ,,   \
-${c2} /   |  |  -\
-${c2}/_-''    ''-_\
+$1      /\
+$1     /  \
+$1    /\   \
+$2   /      \
+$2  /   ,,   \
+$2 /   |  |  -\
+$2/_-''    ''-_\
 ```
 
 ### Configuring Colors in `config.toml`:
@@ -89,4 +89,8 @@ rustfetch --logo nixos
 rustfetch --logo void
 ```
 
-Available distro logos: `arch`, `fedora`, `ubuntu`, `debian`, `gentoo`, `nixos`, `void`, `alpine`, `opensuse`, `manjaro`, `mint`, `pop`, `endeavouros`, `kali`, `artix`, `rhel`, `freebsd`, `macos`, `windows`, `linux`.
+Run `rustfetch --list-logos` for the authoritative list (38 built-in keys); a few examples:
+
+`arch`, `fedora`, `ubuntu`, `debian`, `gentoo`, `nixos`, `void`, `alpine`, `opensuse`, `manjaro`, `mint`, `pop`, `endeavouros`, `kali`, `artix`, `redhat`, `freebsd`, `openbsd`, `macos`, `windows`, plus the cat mascots `cat`, `bengal`, `maine_coon`, `siamese`, `turkish_van`, and `turkish_angora`.
+
+Unknown logo names fall back to the generic Linux/Tux logo; `--logo auto` (the default) detects the host distribution.

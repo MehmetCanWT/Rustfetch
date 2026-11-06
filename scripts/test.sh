@@ -18,8 +18,8 @@ run() {
 }
 
 run cargo fmt --all -- --check
-run cargo test --workspace
-run cargo clippy --workspace --all-targets -- -D warnings
-run cargo build --workspace --release
+run cargo test --workspace --locked
+run cargo clippy --workspace --all-targets --locked -- -D warnings
+run cargo build --workspace --release --locked
 
 run bash scripts/test-cli.sh "$TMP_DIR"

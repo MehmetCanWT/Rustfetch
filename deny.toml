@@ -1,17 +1,31 @@
-# cargo-deny configuration for rustfetch workspace
+# cargo-deny configuration for the rustfetch workspace.
+#
+# Enforced in CI by the `deny` job in .github/workflows/ci.yml
+# (EmbarkStudios/cargo-deny-action@v2 -> `cargo deny check`). A violation
+# fails the workflow, so keep this file valid and review new dependencies.
+#
+# Local usage:  cargo install cargo-deny --locked && cargo deny check
 
 [graph]
+# Empty target list means "all targets"; restrict it only if the workspace
+# stops shipping Linux-specific code.
 targets = []
 all-features = false
 no-default-features = false
 
 [output]
+# Show the dependency path that pulled in each feature in diagnostics.
 feature-depth = 1
 
 [advisories]
+# RustSec advisory database checks (vulnerabilities, unsound code, unmaintained
+# crates). `ignore = []` means every advisory is a hard failure; if an advisory
+# has to be accepted temporarily, add: { id = "RUSTSEC-XXXX-YYYY", reason = "..." }
+# so the exception stays documented and reviewable.
 ignore = []
 
 [licenses]
+# Every dependency must resolve to one of these licenses. Keep the list sorted.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -21,14 +35,22 @@ allow = [
     "Unlicense",
     "Zlib",
 ]
+# Reject ambiguous license metadata instead of trusting it.
 confidence-threshold = 0.8
 
 [bans]
+# Duplicate versions are visible in CI but do not fail the build (some crates
+# legitimately coexist across major versions); switch to "deny" once the tree
+# is clean if strict deduplication is desired.
 multiple-versions = "warn"
+# Wildcard version requirements (e.g. `foo = "*"`) are allowed today; the
+# workspace pins concrete semver ranges, so this is informational only.
 wildcards = "allow"
 highlight = "all"
 
 [sources]
+# Only crates.io and no git dependencies: anything else must be justified here
+# before it can be merged.
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

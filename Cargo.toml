@@ -3,9 +3,16 @@ members = ["core", "render", "cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 authors = ["MehmetCanWT"]
 edition = "2021"
+# Minimum supported Rust version, enforced by the dedicated MSRV CI job and
+# declared by every member crate through `rust-version.workspace = true`.
+#
+# 1.88 is derived from the locked dependency graph: image 0.25.10 (and several
+# transitive crates) declare rust-version = 1.88.0, so anything lower would fail
+# to build. Bump this together with Cargo.lock; verify with the CI `msrv` job.
+rust-version = "1.88"
 description = "A blazing-fast, memory-safe system fetch tool."
 repository = "https://github.com/MehmetCanWT/rustfetch"
 license = "MIT"

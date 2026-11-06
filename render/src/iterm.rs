@@ -25,7 +25,7 @@ pub fn render_iterm_ex(
         return None;
     }
 
-    let (orig_width, orig_height) = image::image_dimensions(path).ok()?;
+    let (orig_width, orig_height) = crate::image::image_dimensions_checked(path)?;
     if orig_width == 0 || orig_height == 0 {
         return None;
     }

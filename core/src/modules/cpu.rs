@@ -1,6 +1,15 @@
 use crate::{Info, Module};
+use std::fs;
+use std::path::Path;
 
 pub struct Cpu;
+
+/// Parsed CPU identity from /proc/cpuinfo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuInfo {
+    pub model: String,
+    pub threads: usize,
+}
 
 impl Module for Cpu {
     fn name(&self) -> &'static str {
@@ -8,13 +17,16 @@ impl Module for Cpu {
     }
 
     fn detect(&self) -> Option<Info> {
-        let content = std::fs::read_to_string("/proc/cpuinfo").ok()?;
-        let value = parse_cpuinfo(&content)?;
-        Some(Info::new("CPU", value))
+        let content = fs::read_to_string("/proc/cpuinfo").ok()?;
+        let info = parse_cpuinfo_fields(&content)
+            .or_else(|| cpuinfo_from_device_tree(Path::new("/proc/device-tree/model"), &content))?;
+        let boost_mhz = read_boost_mhz(Path::new("/sys/devices/system/cpu"));
+        Some(Info::new("CPU", format_cpu(&info, boost_mhz)))
     }
 }
 
-pub fn parse_cpuinfo(content: &str) -> Option<String> {
+/// Parses the model name and logical processor count from /proc/cpuinfo.
+pub fn parse_cpuinfo_fields(content: &str) -> Option<CpuInfo> {
     let mut model_name: Option<String> = None;
     let mut fallback_model: Option<String> = None;
     let mut core_count: usize = 0;
@@ -53,8 +65,66 @@ pub fn parse_cpuinfo(content: &str) -> Option<String> {
     if core_count == 0 {
         return None;
     }
+    Some(CpuInfo {
+        model,
+        threads: core_count,
+    })
+}
 
-    Some(format!("{model} ({core_count})"))
+fn count_threads(content: &str) -> usize {
+    content
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(key, val)| {
+            key.trim().eq_ignore_ascii_case("processor") && val.trim().parse::<usize>().is_ok()
+        })
+        .count()
+}
+
+/// Legacy formatter without the boost clock suffix.
+pub fn parse_cpuinfo(content: &str) -> Option<String> {
+    parse_cpuinfo_fields(content).map(|info| format!("{} ({})", info.model, info.threads))
+}
+
+/// Formats the CPU row, appending the maximum (boost) clock when available.
+pub fn format_cpu(info: &CpuInfo, boost_mhz: Option<u64>) -> String {
+    let mut value = format!("{} ({})", info.model, info.threads);
+    if let Some(mhz) = boost_mhz.filter(|mhz| *mhz > 0) {
+        value.push_str(&format!(" @ {:.2} GHz", mhz as f64 / 1000.0));
+    }
+    value
+}
+
+/// Reads the maximum frequency (in MHz) from cpufreq, if the driver exposes it.
+pub fn read_boost_mhz(cpu_root: &Path) -> Option<u64> {
+    for relative in [
+        "cpu0/cpufreq/cpuinfo_max_freq",
+        "cpu0/cpufreq/scaling_max_freq",
+    ] {
+        if let Ok(text) = fs::read_to_string(cpu_root.join(relative)) {
+            if let Ok(khz) = text.trim().parse::<u64>() {
+                if khz > 0 {
+                    return Some(khz / 1000);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// aarch64 boards often expose no model name in /proc/cpuinfo; fall back to the
+/// device-tree model string.
+pub fn cpuinfo_from_device_tree(model_path: &Path, cpuinfo: &str) -> Option<CpuInfo> {
+    let model = fs::read_to_string(model_path).ok()?;
+    let model = model.trim_matches('\0').trim().to_string();
+    if model.is_empty() {
+        return None;
+    }
+    let threads = count_threads(cpuinfo);
+    if threads == 0 {
+        return None;
+    }
+    Some(CpuInfo { model, threads })
 }
 
 #[cfg(test)]
@@ -63,62 +133,32 @@ mod tests {
     use insta::assert_snapshot;
 
     /// Realistic Fedora Linux /proc/cpuinfo fixture with 2 processor blocks (AMD Ryzen 7 5800X).
-    const FEDORA_RYZEN_CPUINFO: &str = r#"processor	: 0
-vendor_id	: AuthenticAMD
-cpu family	: 25
-model		: 33
-model name	: AMD Ryzen 7 5800X
-stepping	: 0
-microcode	: 0xa201016
-cpu MHz		: 3800.000
-cache size	: 512 KB
-physical id	: 0
-siblings	: 16
-core id		: 0
-cpu cores	: 8
-apicid		: 0
-initial apicid	: 0
-fpu		: yes
-fpu_exception	: yes
-cpuid level	: 16
-wp		: yes
-flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca fsrm
-bugs		: sysret_ss_attrs spectre_v1 spectre_v2 spec_store_bypass
-bogomips	: 7586.12
-TLB size	: 2560 4K pages
-clflush size	: 64
-cache_alignment	: 64
-address sizes	: 48 bits physical, 48 bits virtual
-power management: ts ttp tm hwpstate cpb eff_freq_ro [13] [14]
+    const FEDORA_RYZEN_CPUINFO: &str = "processor\t: 0
+vendor_id\t: AuthenticAMD
+model\t\t: 33
+model name\t: AMD Ryzen 7 5800X
+cpu MHz\t\t: 3800.000
+cache size\t: 512 KB
+physical id\t: 0
+core id\t\t: 0
+cpu cores\t: 8
+\nprocessor\t: 1
+vendor_id\t: AuthenticAMD
+model\t\t: 33
+model name\t: AMD Ryzen 7 5800X
+cpu MHz\t\t: 3800.000
+cache size\t: 512 KB
+physical id\t: 0
+core id\t\t: 1
+cpu cores\t: 8
+";
 
-processor	: 1
-vendor_id	: AuthenticAMD
-cpu family	: 25
-model		: 33
-model name	: AMD Ryzen 7 5800X
-stepping	: 0
-microcode	: 0xa201016
-cpu MHz		: 3800.000
-cache size	: 512 KB
-physical id	: 0
-siblings	: 16
-core id		: 1
-cpu cores	: 8
-apicid		: 2
-initial apicid	: 2
-fpu		: yes
-fpu_exception	: yes
-cpuid level	: 16
-wp		: yes
-flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca fsrm
-bugs		: sysret_ss_attrs spectre_v1 spectre_v2 spec_store_bypass
-bogomips	: 7586.12
-TLB size	: 2560 4K pages
-clflush size	: 64
-cache_alignment	: 64
-address sizes	: 48 bits physical, 48 bits virtual
-power management: ts ttp tm hwpstate cpb eff_freq_ro [13] [14]
-"#;
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("rustfetch_cpu_test_{tag}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
 
     #[test]
     fn test_parse_cpuinfo_fedora_2_cores() {
@@ -157,6 +197,57 @@ power management: ts ttp tm hwpstate cpb eff_freq_ro [13] [14]
     }
 
     #[test]
+    fn test_parse_fields_thread_count() {
+        let info = parse_cpuinfo_fields(FEDORA_RYZEN_CPUINFO).unwrap();
+        assert_eq!(info.threads, 2);
+        assert_eq!(info.model, "AMD Ryzen 7 5800X");
+    }
+
+    #[test]
+    fn test_format_cpu_with_boost() {
+        let info = CpuInfo {
+            model: "AMD Ryzen 7 5800X".to_string(),
+            threads: 16,
+        };
+        assert_eq!(
+            format_cpu(&info, Some(4700)),
+            "AMD Ryzen 7 5800X (16) @ 4.70 GHz"
+        );
+        assert_eq!(format_cpu(&info, None), "AMD Ryzen 7 5800X (16)");
+        assert_eq!(format_cpu(&info, Some(0)), "AMD Ryzen 7 5800X (16)");
+    }
+
+    #[test]
+    fn test_read_boost_mhz_from_fixture() {
+        let root = unique_dir("boost");
+        let cpufreq = root.join("cpu0/cpufreq");
+        fs::create_dir_all(&cpufreq).unwrap();
+        fs::write(cpufreq.join("cpuinfo_max_freq"), "4700000\n").unwrap();
+        fs::write(cpufreq.join("scaling_max_freq"), "3200000\n").unwrap();
+        assert_eq!(read_boost_mhz(&root), Some(4700));
+        fs::remove_file(cpufreq.join("cpuinfo_max_freq")).unwrap();
+        assert_eq!(read_boost_mhz(&root), Some(3200));
+        fs::remove_file(cpufreq.join("scaling_max_freq")).unwrap();
+        assert_eq!(read_boost_mhz(&root), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_device_tree_fallback_trimming_null() {
+        let root = unique_dir("dt");
+        fs::create_dir_all(&root).unwrap();
+        let model_path = root.join("model");
+        fs::write(&model_path, "Raspberry Pi 5\0").unwrap();
+        let cpuinfo = "processor\t: 0\nprocessor\t: 1\nprocessor\t: 2\nprocessor\t: 3\n";
+        let info = cpuinfo_from_device_tree(&model_path, cpuinfo).unwrap();
+        assert_eq!(info.model, "Raspberry Pi 5");
+        assert_eq!(info.threads, 4);
+        fs::write(&model_path, "\0").unwrap();
+        assert!(cpuinfo_from_device_tree(&model_path, cpuinfo).is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn test_cpu_module_name() {
         let cpu = Cpu;
         assert_eq!(cpu.name(), "cpu");
@@ -168,7 +259,8 @@ power management: ts ttp tm hwpstate cpb eff_freq_ro [13] [14]
         if let Some(info) = cpu.detect() {
             assert_eq!(info.label, "CPU");
             assert!(info.value.contains('('));
-            assert!(info.value.ends_with(')'));
+            // Either ends with the thread count or with an appended boost clock.
+            assert!(info.value.ends_with(')') || info.value.contains(" GHz"));
         }
     }
 }

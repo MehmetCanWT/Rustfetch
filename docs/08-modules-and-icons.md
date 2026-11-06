@@ -1,8 +1,8 @@
 # Telemetry Modules & Nerd Font v3 Icons
 
-RustFetch gathers system telemetry across **28+ kernel, hardware, desktop, and network collectors** with zero subshell overhead.
+RustFetch gathers system telemetry across **39 canonical module names** (the authoritative list is printed by `rustfetch --list-modules` and matches `rustfetch_core::modules::module_names()`). Core kernel telemetry is read directly from `/proc`, `/sys`, and stat syscalls without shell sub-processes; collectors that have no kernel interface (package-manager fallbacks, the GitHub update check, and the optional sound/Wi-Fi/Bluetooth/media modules) may call bounded external tools and are skipped when those tools are missing.
 
-All default icons are modernized using **Nerd Font v3 (Material Design Symbols)** glyphs, replacing broken legacy characters. Furthermore, RustFetch detects your Linux distribution and automatically assigns an authentic, distribution-specific OS glyph.
+All default icons use **Nerd Font v3 (Material Design Symbols)** glyphs. RustFetch also detects your Linux distribution and assigns an authentic, distribution-specific OS glyph.
 
 ---
 
@@ -10,50 +10,71 @@ All default icons are modernized using **Nerd Font v3 (Material Design Symbols)*
 
 ### Distro-Aware Operating System Glyphs
 
-The `os` module queries `/etc/os-release` and automatically renders your distribution's authentic Nerd Font glyph:
+The `os` module queries `/etc/os-release` and automatically renders your distribution's Nerd Font glyph:
 
-| Distribution | Glyph | Nerd Font Identifier | Unicode |
-|---|:---:|---|---|
-| **Arch Linux / CachyOS** | `󰣇` | `nf-md-arch` | `U+F08C7` |
-| **Fedora Linux** | `󰣛` | `nf-md-fedora` | `U+F08DB` |
-| **Ubuntu** | `󰕈` | `nf-md-ubuntu` | `U+F0548` |
-| **Debian** | `󰣚` | `nf-md-debian` | `U+F08DA` |
-| **NixOS** | `󱄅` | `nf-md-nix` | `U+F1105` |
-| **Gentoo** | `󰣨` | `nf-md-gentoo` | `U+F08E8` |
-| **Manjaro** | `󱘊` | `nf-md-manjaro` | `U+F160A` |
-| **macOS** | `󰀵` | `nf-md-apple` | `U+F0035` |
-| **Windows** | `󰍲` | `nf-md-microsoft_windows` | `U+F0372` |
-| **Generic Linux / BSD** | `󰌽` | `nf-md-linux` | `U+F033D` |
+| Distribution | Glyph | Nerd Font Identifier |
+|---|:---:|---|
+| **Arch Linux / CachyOS** | `󰣇` | `nf-md-arch` |
+| **Fedora Linux** | `󰣛` | `nf-md-fedora` |
+| **Ubuntu** | `󰕈` | `nf-md-ubuntu` |
+| **Debian** | `󰣚` | `nf-md-debian` |
+| **NixOS** | `󱄅` | `nf-md-nix` |
+| **Gentoo** | `󰣨` | `nf-md-gentoo` |
+| **Manjaro** | `󱘊` | `nf-md-manjaro` |
+| **Linux Mint** | `󰣭` | `nf-md-linux_mint` |
+| **Alpine** | `󰣠` | `nf-md-alpine` |
+| **openSUSE** | `󰣡` | `nf-md-opensuse` |
+| **Kali Linux** | `󰣳` | `nf-md-kali_linux` |
+| **Pop!_OS** | `󰣩` | `nf-md-pop_os` |
+| **EndeavourOS** | `󰣫` | `nf-md-endeavouros` |
+| **macOS** | `󰀵` | `nf-md-apple` |
+| **Windows** | `󰍲` | `nf-md-microsoft_windows` |
+| **Generic Linux / BSD** | `󰌽` | `nf-md-linux` |
 
 ---
 
-### Hardware & System Module Glyphs
+### Default Module Glyphs
 
-| Module | Default Icon | Meaning | Description |
-|---|:---:|---|---|
-| `cpu` | `󰍛` | Processor | Integrated circuit chip |
-| `gpu` | `󰘚` | Graphics Card | Expansion card / GPU |
-| `memory` | `󰘚` | Memory (RAM) | Memory module / RAM stick |
-| `swap` | `󰓡` | Swap Space | Paged memory buffer |
-| `disk` | `󰋊` | Storage Drive | Hard drive / SSD disk |
-| `battery` | `󰂁` | Battery Power | Battery charge indicator |
-| `shell` | `󰞷` | User Shell | Terminal prompt (`>_`) |
-| `terminal` | `󰆍` | Terminal Emulator | Terminal window |
-| `terminal_font` | `󰛖` | Terminal Font | Typography font glyph |
-| `uptime` | `󱑂` | System Uptime | Clock timer |
-| `packages` | `󰏖` | Package Manager | Package parcel box |
-| `host` | `󰌢` | Computer Hardware | Laptop / Desktop device |
-| `wifi` | `󰖩` | Wireless Network | Wi-Fi radio wave |
-| `local_ip` | `󰩩` | Local IP | Network interface |
-| `public_ip` | `󰩩` | Public IP | Internet gateway |
-| `de` / `wm` | `󰧨` | Desktop Environment | Desktop window tiling |
-| `theme` | `󰔎` | Theme | Paint palette |
-| `icons` | `󰀻` | Icon Theme | Grid of icons |
-| `media` | `󰝚` | Media Player | Music note |
-| `sound` | `󰕾` | Audio Volume | Speaker volume |
-| `temp` | `󰔏` | Temperature | Thermometer sensor |
-| `brightness` | `󰃠` | Display Backlight | Sun / Brightness |
-| `display` | `󰍹` | Monitor Display | Video display screen |
+Every icon can be overridden per module with `icon = "..."` in `[[modules]]`.
+
+| Module | Default Icon | Description |
+|---|:---:|---|
+| `os` | `󰌽` | Operating system |
+| `os_age` | `󰃭` | OS installation age |
+| `host` | `󰌢` | Host / laptop model |
+| `board` | `󰘚` | Motherboard |
+| `kernel` | `󰒋` | Kernel release |
+| `uptime` | `󱑂` | System uptime |
+| `packages` | `󰏖` | Package counts |
+| `shell` | `󰞷` | User shell |
+| `desktop` | `󰨇` | Desktop environment / WM |
+| `font` | `󰛖` | UI font |
+| `terminal` | `󰆍` | Terminal emulator |
+| `cpu` | `󰍛` | Processor |
+| `cpu_usage` | `󰓅` | CPU utilization |
+| `temp` | `󰔏` | Temperature |
+| `gpu` / `dgpu` / `igpu` | `󰢮` | Graphics card |
+| `gpu_driver` | `󰢮` | Kernel GPU driver |
+| `memory` | `󰘚` | RAM |
+| `swap` | `󰓡` | Swap |
+| `disk` | `󰋊` | Storage |
+| `battery` | `󰂁` | Battery |
+| `power_profile` | `󰓅` | Power profile |
+| `brightness` | `󰃠` | Backlight |
+| `display` | `󰍹` | Monitor |
+| `sound` | `󰕾` | Audio sink |
+| `media` | `󰝚` | Media player |
+| `bluetooth` | `󰂯` | Bluetooth |
+| `wifi` | `󰖩` | Wi-Fi |
+| `net_io` | `󰛳` | Network traffic |
+| `local_ip` | `󰩟` | Local IP |
+| `locale` | `󰗊` | Locale |
+| `processes` | `󰒋` | Process count |
+| `init` | `` | Init system |
+| `container` | `󰡨` | Container / VM |
+| `update` | `󰚰` | Update notifier |
+| `custom` | `󰅐` | Static custom row |
+| `break` / `divider` | — | Section divider line |
 
 ---
 
@@ -61,28 +82,48 @@ The `os` module queries `/etc/os-release` and automatically renders your distrib
 
 ### 1. System & Kernel Modules
 - **`os`**: Operating system name, edition, and architecture (`Arch Linux x86_64`).
-- **`kernel`**: Running Linux kernel release (`Linux 6.13.0-arch1-1`).
-- **`host`**: Motherboard or laptop model from DMI sysfs (`ThinkPad T14 Gen 3`).
-- **`board`**: Motherboard model name.
-- **`uptime`**: System uptime formatted into days, hours, and minutes.
-- **`packages`**: Package manager inventory (pacman, flatpak, nix, apt, dnf, rpm, apk, xbps, emerge). Pure filesystem scan with a 2-hour TTL cache.
+- **`os_age`**: Installation age from the root filesystem birth time (`statx(STATX_BTIME)`, with an mtime fallback).
+- **`host`**: Laptop/desktop model from DMI sysfs (`product_name`, `product_version`).
+- **`board`**: Motherboard vendor and model from DMI sysfs.
+- **`kernel`**: Running kernel release from `/proc/version` or `/proc/sys/kernel/osrelease`.
+- **`uptime`**: Uptime from `/proc/uptime`, formatted into days, hours, and minutes.
+- **`packages`**: Installed package counts (pacman, dpkg, rpm via sqlite, flatpak, snap, nix, apk, xbps, emerge), cached for 2 hours.
+- **`locale`**: `$LANG` / `$LC_ALL` language and encoding.
+- **`processes`**: Total and running process counts from `/proc/loadavg` (PID-directory fallback).
+- **`init`**: PID 1 init system (`systemd`, `openrc`, `runit`, `dinit`, `s6`, ...).
+- **`container`**: Docker / Podman / Distrobox / Toolbox / LXC / systemd-nspawn / Flatpak detection.
+- **`update`**: Cached (6 h TTL) GitHub release notifier with cat-breed codename and OSC 8 link.
+- **`custom`**: A static `label`/`value` row from the config (no shell commands).
+- **`break` / `divider`**: Internal divider line (`├──┤`), optionally with a `label`.
 
 ### 2. Hardware & Sensor Modules
-- **`cpu`**: Processor brand, model, core count, and frequency (`AMD Ryzen 7 7840U @ 5.10GHz`).
-- **`gpu`**: Dedicated and integrated graphics cards scanned from PCI bus.
-- **`memory`**: Memory usage, total capacity, and percentage bar (`8.4 GiB / 31.2 GiB (27%)`).
-- **`swap`**: Swap space allocation and utilization.
-- **`disk`**: Filesystem mount point capacity and percentage usage (`statvfs`).
-- **`battery`**: Battery charge level, charging status, health percentage, and cycle count.
-- **`brightness`**: Display backlight brightness percentage from `/sys/class/backlight`.
-- **`temp`**: Hardware thermal monitoring sensors (`hwmon`).
+- **`cpu`**: Processor model name and logical thread count from `/proc/cpuinfo`.
+- **`cpu_usage`**: Aggregate CPU utilization percentage from `/proc/stat`.
+- **`temp`**: Hardware thermal sensors from `/sys/class/hwmon` and `/sys/class/thermal`.
+- **`gpu`**: Graphics processors detected through sysfs/PCI, with dGPU priority and iGPU fallback (`type = "dgpu"` / `"igpu"` / `"all"`).
+- **`dgpu`** / **`igpu`**: Discrete-only / integrated-only GPU views.
+- **`gpu_driver`**: Bound kernel module and version from `/sys/bus/pci/devices/*/driver`.
+- **`memory`**: RAM usage and total capacity from `/proc/meminfo`.
+- **`swap`**: Swap usage and total capacity from `/proc/meminfo`.
+- **`disk`**: Filesystem usage via `statvfs`, with Ostree/`/sysroot` awareness and multi-mount support (`path = "/home"`).
+- **`battery`**: Charge level, AC status, cycle count, and design-vs-full health percentage from `/sys/class/power_supply`.
+- **`power_profile`**: ACPI platform profile, CPU scaling governor, and `energy_performance_preference`.
+- **`brightness`**: Backlight brightness percentage from `/sys/class/backlight`.
+- **`display`**: Connected monitors, resolution, and refresh rate from `/sys/class/drm`. The EDID parser validates the 128-byte header and checksum, reads the four detailed timing descriptors, and follows CTA-861 extension blocks. When EDID is unavailable it falls back to the connector's first advertised mode.
+- **`sound`**: Sink volume and mute state via `wpctl` / PulseAudio when available.
+- **`media`**: Currently playing MPRIS track via `playerctl` when available.
+- **`bluetooth`**: Connected Bluetooth peripherals via `bluetoothctl` when available.
 
 ### 3. Desktop & Environment Modules
-- **`de` / `wm`**: Active desktop environment (GNOME, KDE Plasma, XFCE) or window manager (Hyprland, Sway, i3, niri).
-- **`shell`**: Login shell binary and version (`zsh 5.9`).
-- **`terminal`**: Terminal emulator parsed from parent process tree (`kitty`, `alacritty`, `foot`).
-- **`terminal_font`**: Active terminal font name and point size.
-- **`theme`**, **`icons`**, **`font`**, **`cursor`**: Desktop styling settings.
+- **`shell`**: Login shell name from `$SHELL` (parent-process fallback). The shell version is not detected.
+- **`desktop`**: Desktop environment or window manager (`GNOME`, `KDE`, `Hyprland`, `Sway`, `Niri`, `MangoWM`, `COSMIC`, ...), including the display server.
+- **`font`**: Active UI font from KDE `kdeglobals` or GTK 3/4 `settings.ini`.
+- **`terminal`**: Terminal emulator parsed from the parent process tree and environment (`kitty`, `ghostty`, `foot`, `wezterm`, `alacritty`).
+
+### 4. Network Modules
+- **`wifi`**: Connected SSID, signal quality, and band via `iw`, `nmcli`, or `iwgetid` when available.
+- **`net_io`**: Cumulative RX/TX totals for the default-route interface from `/sys/class/net`. When the module runs again within 10 seconds, it also reports the measured throughput rate based on the RX/TX delta.
+- **`local_ip`**: Primary LAN IPv4 address via `getifaddrs`.
 
 ---
 
@@ -102,11 +143,11 @@ format = "{icon} {value}"
 name = "memory"
 label = "RAM"
 bar = true
-bar_width = 12
-bar_style = "blocks"    # "blocks", "braille", "ascii"
+bar_width = 12             # 1..=256
+bar_style = "blocks"       # "blocks", "line", "dots", "ascii"
 
 [[modules]]
-# Horizontal Divider Line (creates '├── Hardware ──┤' inside boxes)
+# Horizontal divider line (creates '├── Hardware ──┤' inside boxes)
 name = "break"
 label = "Hardware"
 
@@ -115,13 +156,15 @@ name = "cpu"
 label = "CPU"
 
 [[modules]]
-# Custom Shell Command
+# Static custom row: no command execution
 name = "custom"
-command = "curl -s ifconfig.me"
-icon = "󰩩"
-label = "Public IP"
+label = "Note"
+value = "hello"
+icon = "󰅐"
 color = "yellow"
 ```
+
+Supported per-module keys: `name`, `label`, `icon`, `color`, `format`, `bar`, `bar_width`, `bar_style`, `path` (disk mounts), and the GPU selector (`type` / `gpu_type`). Unknown module names and out-of-range values are clamped/ignored and reported by `rustfetch --doctor`.
 
 ---
 
@@ -145,7 +188,7 @@ rustfetch --icon-only
 - `key_type = "both"`: Displays icon and label (`󰍛 CPU: ...`)
 - `key_type = "icon"`: Displays icon only (`󰍛 ...`)
 - `key_type = "title"`: Displays label only (`CPU: ...`)
-- `key_type = "none"`: Displays value only.
+- `key_type = "none"`: Displays the value only.
 
 ### 3. Custom Separator (`separator`)
 ```toml

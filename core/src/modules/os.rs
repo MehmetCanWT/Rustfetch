@@ -22,10 +22,16 @@ pub fn read_os() -> Option<String> {
 
 fn unquote(val: &str) -> &str {
     let s = val.trim();
-    s.strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .or_else(|| s.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-        .unwrap_or(s)
+    // Tolerate unbalanced quotes (hand-edited or broken os-release files):
+    // strip one leading quote and one matching trailing quote independently.
+    let s = if let Some(rest) = s.strip_prefix('"') {
+        rest.strip_suffix('"').unwrap_or(rest)
+    } else if let Some(rest) = s.strip_prefix('\'') {
+        rest.strip_suffix('\'').unwrap_or(rest)
+    } else {
+        s
+    };
+    s.trim()
 }
 
 pub fn parse_os(content: &str) -> Option<String> {
@@ -141,6 +147,20 @@ ID=arch
         assert_eq!(parse_os(""), None);
         assert_eq!(parse_os("# Comment line only\n"), None);
         assert_eq!(parse_os("SOME_OTHER_KEY=value\n"), None);
+    }
+
+    #[test]
+    fn test_parse_os_unbalanced_quotes_are_cleaned() {
+        // Regression: a broken os-release must not leak a stray quote into the UI.
+        assert_eq!(
+            parse_os("PRETTY_NAME=\"unclosed\nNAME=\"Qux\"\n"),
+            Some("unclosed".to_string())
+        );
+        assert_eq!(parse_os("PRETTY_NAME='Open\n"), Some("Open".to_string()));
+        assert_eq!(
+            parse_os("PRETTY_NAME=\"\"\nNAME=\"Fallback\"\n"),
+            Some("Fallback".to_string())
+        );
     }
 
     #[test]

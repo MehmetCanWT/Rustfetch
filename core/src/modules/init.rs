@@ -16,9 +16,60 @@ impl Module for Init {
 }
 
 pub fn detect_init_name() -> Option<String> {
+    if is_container_environment() {
+        // Inside a container PID 1 is usually the app itself; reporting "npm"
+        // or "python" as the init system is misleading, so hide the module.
+        return None;
+    }
     let exe_path = fs::read_link("/proc/1/exe").ok();
     let comm = fs::read_to_string("/proc/1/comm").ok();
     parse_init(exe_path.as_deref(), comm.as_deref())
+}
+
+/// True when the current environment is a container (Docker/Podman/LXC/...).
+///
+/// Testable through injected filesystem/env accessors.
+fn container_markers(
+    path_exists: impl Fn(&str) -> bool,
+    read_str: impl Fn(&str) -> Option<String>,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) -> bool {
+    if path_exists("/.dockerenv") || path_exists("/run/.containerenv") {
+        return true;
+    }
+    if let Some(content) = read_str("/run/systemd/container") {
+        if !content.trim().is_empty() {
+            return true;
+        }
+    }
+    if let Some(cgroup) = read_str("/proc/1/cgroup") {
+        let lower = cgroup.to_lowercase();
+        for marker in [
+            "docker",
+            "podman",
+            "libpod",
+            "lxc",
+            "lxd",
+            "kubepods",
+            "containerd",
+            "buildkit",
+            "garden",
+            "systemd-nspawn",
+        ] {
+            if lower.contains(marker) {
+                return true;
+            }
+        }
+    }
+    env_lookup("container").is_some() || env_lookup("CONTAINER_ID").is_some()
+}
+
+fn is_container_environment() -> bool {
+    container_markers(
+        |path| Path::new(path).exists(),
+        |path| fs::read_to_string(path).ok(),
+        |var| std::env::var(var).ok(),
+    )
 }
 
 pub fn parse_init(exe_path: Option<&Path>, comm: Option<&str>) -> Option<String> {
@@ -121,5 +172,55 @@ mod tests {
     #[test]
     fn test_parse_init_empty() {
         assert_eq!(parse_init(None, None), None);
+    }
+
+    #[test]
+    fn test_container_markers() {
+        assert!(container_markers(
+            |path| path == "/.dockerenv",
+            |_| None,
+            |_| None
+        ));
+        assert!(container_markers(
+            |_| false,
+            |_| Some("docker".into()),
+            |_| None
+        ));
+        assert!(container_markers(
+            |_| false,
+            |path| {
+                if path == "/proc/1/cgroup" {
+                    Some("0::/kubepods/besteffort/pod123\n".into())
+                } else {
+                    None
+                }
+            },
+            |_| None
+        ));
+        assert!(container_markers(
+            |_| false,
+            |_| None,
+            |var| {
+                if var == "container" {
+                    Some("systemd-nspawn".into())
+                } else {
+                    None
+                }
+            }
+        ));
+        // A plain systemd host must not be treated as a container.
+        assert!(!container_markers(
+            |_| false,
+            |path| {
+                if path == "/run/systemd/container" {
+                    Some("   \n".into())
+                } else if path == "/proc/1/cgroup" {
+                    Some("0::/init.scope\n".into())
+                } else {
+                    None
+                }
+            },
+            |_| None
+        ));
     }
 }

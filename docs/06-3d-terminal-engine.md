@@ -18,6 +18,10 @@ rustfetch --3d --speed 1.5 --depth 1.4
 # High-resolution 2x2 Quadrant block shading
 rustfetch --3d --shading-mode blocks
 
+# Edge-only and solid-silhouette looks
+rustfetch --3d --shading-mode wireframe
+rustfetch --3d --shading-mode solid
+
 # Ultra-crisp 2x3 Unicode Sextant sub-pixel shading
 rustfetch --3d --shading-mode sextants
 
@@ -34,7 +38,8 @@ rustfetch --3d --frames 120
 | `--3d` | Bool | `false` | Enables real-time 3D graphics mode. |
 | `--logo <DISTRO>` | String | Host Distro | Distro logo to extrude (`arch`, `ubuntu`, `fedora`, `debian`, `gentoo`, etc.). |
 | `--ascii <PATH>` | File Path | - | Extrudes a custom user ASCII text file into 3D. |
-| `--shading-mode <MODE>` | Enum | `ascii` | Sub-cell rasterization mode: `ascii`, `blocks`, or `sextants`. |
+| `--shading-mode <MODE>` | Enum | `ascii` | Sub-cell rasterization mode: `ascii`, `blocks`, `sextants`, `braille`, `dot`, `wireframe`, or `solid`. |
+| `--shading <CHARS>` | String | mode default | Custom shading character ramp (overrides the mode's built-in ramp). |
 | `--speed <FLOAT>` | Float | `1.0` | Angular rotation speed multiplier. |
 | `--depth <FLOAT>` | Float | `1.0` | Z-axis relief depth extrusion multiplier. |
 | `--size <FLOAT>` | Float | `1.0` | Scale multiplier of the rendered 3D model. |
@@ -47,7 +52,7 @@ rustfetch --3d --frames 120
 
 ## 🎨 Shading Modes
 
-RustFetch supports three sub-cell rasterization modes depending on your terminal emulator and font:
+RustFetch supports seven sub-cell rasterization modes depending on your terminal emulator and font. Unknown values fall back to `ascii` and are reported as a config warning (`rustfetch --doctor`):
 
 ### 1. `ascii` (Standard 1x1 Cell)
 - **Sub-grid:** 1x1
@@ -75,6 +80,24 @@ RustFetch supports three sub-cell rasterization modes depending on your terminal
   ```bash
   rustfetch --3d --shading-mode sextants
   ```
+
+### 4. `braille` (Braille 2x4 Sub-Cell)
+- **Sub-grid:** 2x4 Unicode braille dots.
+- **Visuals:** Very fine dot-matrix edges; works in almost every modern terminal with a Unicode font.
+
+### 5. `dot` (Dot-Matrix)
+- **Visuals:** Stippled dot-matrix relief, useful for a lighter, less blocky look.
+
+### 6. `wireframe` (Edge-Only)
+- **Visuals:** Draws only the mesh silhouette/edges instead of filled surfaces — good for a technical HUD look.
+
+### 7. `solid` (Filled Silhouette)
+- **Visuals:** Fills the projected silhouette with solid shading rather than a character ramp.
+
+Custom ramps apply to every mode:
+```bash
+rustfetch --3d --shading-mode blocks --shading " .:-=+*#%@"
+```
 
 ---
 
@@ -113,10 +136,18 @@ When running in an interactive shell, the 3D animation loops smoothly without fl
 
 [general.logo.three_d]
 enabled = true
-shading_mode = "blocks"    # "ascii", "blocks", "sextants"
-speed = 1.2
-depth = 1.2
-size = 1.0
-fps = 30.0
+shading_mode = "blocks"    # ascii, blocks, sextants, braille, dot, wireframe, solid
+shading = " .:-=+*#%@"     # Optional custom ramp
+speed = 1.2                # 0.05..=10
+depth = 1.2                # 0.1..=5
+size = 1.0                 # 0.1..=3.0
+width = 42                 # 1..=512
+height = 24                # 1..=512
+light = "top-left"
+frames = 120               # Optional: stop after N frames
 exit_on_key = true
 ```
+
+The target frame rate is set per run with `--fps <FPS>` (default `30`) or through
+`[[modules]]`-independent `[general.logo.animation] fps` for ASCII animations; it is
+not a `three_d` config key.

@@ -38,6 +38,21 @@ image_width_cols = 38
 protocol = "auto"         # "auto", "kitty", "halfblock", "sixel", "iterm"
 ```
 
+### Image Placement (logo positions)
+
+`position` in `[general.logo]` (or `--logo-position`) controls where the graphic is placed:
+
+| Logo kind | Supported positions |
+|---|---|
+| ASCII logo (built-in art / `--ascii` file) | `left` (default), `right`, `top`, `bottom`, `behind` |
+| Image logo (`--image`, `image_path`, or `image_dir` gallery) | `left` (default), `top`, `behind` |
+
+`right` and `bottom` are ASCII-only placements. If one is requested while an image is
+the active logo, RustFetch prints a single warning line to stderr and renders the image
+on the left instead. `behind` renders the image as a true text-underlay only in
+Kitty-compatible terminals (Kitty, Ghostty, WezTerm); elsewhere it is drawn as a normal
+foreground image.
+
 ---
 
 ## 🎲 Random Wallpaper Gallery (`image_dir`)

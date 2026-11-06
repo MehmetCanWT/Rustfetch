@@ -66,6 +66,12 @@ pub fn is_frame_delimiter(line: &str) -> bool {
 
 /// Parses multi-frame ASCII content from a single string.
 pub fn parse_ascii_frames_from_str(content: &str) -> Vec<Vec<String>> {
+    // Empty or whitespace-only content has no frames at all; callers treat this
+    // as "nothing to render" instead of a single empty frame.
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
+
     // If form-feed (\x0c) exists, split by form-feed first
     if content.contains('\x0c') {
         let parts: Vec<&str> = content.split('\x0c').collect();
@@ -162,17 +168,57 @@ pub fn load_ascii_frames(path: &Path) -> io::Result<Vec<Vec<String>>> {
     }
 }
 
-/// Replaces Neofetch style color placeholders ($1..$6, ${c1}..${c6}) with ANSI escape codes.
-pub fn apply_neofetch_colors(content: &str, colors: &[&str]) -> String {
-    let mut result = content.to_string();
-    for (i, &col_code) in colors.iter().enumerate() {
-        let n = i + 1;
-        let var_short = format!("${n}");
-        let var_long = format!("${{c{n}}}");
-        result = result
-            .replace(&var_long, col_code)
-            .replace(&var_short, col_code);
+/// Parses a neofetch color placeholder at the start of `rest`.
+///
+/// Accepts the short form `$1` and the long form `${c1}`. Returns the
+/// 1-based color number and the number of bytes consumed by the token.
+fn parse_color_token(rest: &str) -> Option<(usize, usize)> {
+    if let Some(after) = rest.strip_prefix("${c") {
+        let end = after.find('}')?;
+        let digits = &after[..end];
+        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let n = digits.parse::<usize>().ok()?;
+        return Some((n, after[..end].len() + 4));
     }
+
+    let after = rest.strip_prefix('$')?;
+    let digits_len = after
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if digits_len == 0 {
+        return None;
+    }
+    let n = after[..digits_len].parse::<usize>().ok()?;
+    Some((n, digits_len + 1))
+}
+
+/// Replaces Neofetch style color placeholders ($1..$N, ${c1}..${cN}) with ANSI escape codes.
+///
+/// Matching is token based: the whole digit run after `$` is consumed, so `$10`
+/// means the tenth color rather than color 1 followed by a literal zero. An
+/// out-of-range placeholder is preserved verbatim.
+pub fn apply_neofetch_colors(content: &str, colors: &[&str]) -> String {
+    let mut result = String::with_capacity(content.len());
+    let mut offset = 0;
+
+    while offset < content.len() {
+        let rest = &content[offset..];
+        if let Some((n, consumed)) = parse_color_token(rest) {
+            if n >= 1 && n <= colors.len() {
+                result.push_str(colors[n - 1]);
+                offset += consumed;
+                continue;
+            }
+        }
+        let ch = rest.chars().next().unwrap_or('\0');
+        result.push(ch);
+        offset += ch.len_utf8();
+    }
+
     result
 }
 
@@ -257,5 +303,44 @@ mod tests {
             result,
             "\x1b[31mRed text \x1b[34mBlue text\x1b[31m Normal text"
         );
+    }
+
+    #[test]
+    fn test_apply_neofetch_colors_multi_digit_token() {
+        let colors: Vec<String> = (0..12).map(|i| format!("\x1b[3{i}m")).collect();
+        let refs: Vec<&str> = colors.iter().map(String::as_str).collect();
+        assert_eq!(apply_neofetch_colors("$10", &refs), "\x1b[39m");
+        assert_eq!(apply_neofetch_colors("${c11}", &refs), "\x1b[310m");
+        // With only two colors "$10" is not color 1 plus "0"; it stays literal.
+        let two = vec!["A", "B"];
+        assert_eq!(apply_neofetch_colors("$10", &two), "$10");
+        assert_eq!(apply_neofetch_colors("${c99}", &two), "${c99}");
+    }
+
+    #[test]
+    fn test_apply_neofetch_colors_preserves_literal_dollar() {
+        assert_eq!(apply_neofetch_colors("$ price", &["X"]), "$ price");
+        assert_eq!(apply_neofetch_colors("$0", &["X"]), "$0");
+        assert_eq!(apply_neofetch_colors("", &["X"]), "");
+    }
+
+    #[test]
+    fn test_parse_empty_content_has_no_frames() {
+        assert!(parse_ascii_frames_from_str("").is_empty());
+        assert!(parse_ascii_frames_from_str("   \n\t\n").is_empty());
+        assert!(parse_ascii_frames_from_str("\x0c").is_empty());
+    }
+
+    #[test]
+    fn test_load_ascii_frames_empty_file_is_error() {
+        let dir =
+            std::env::temp_dir().join(format!("rustfetch_ascii_test_empty_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("empty.txt");
+        fs::write(&file, "").unwrap();
+        let result = load_ascii_frames(&file);
+        assert!(result.is_err(), "empty single file must not yield a frame");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -1,6 +1,10 @@
 //! JSON and Waybar structured export formats.
+//!
+//! All output goes through crate::text::write_stdout_line so that a full disk
+//! or a closed pipe never turns into a print! panic.
 
 use crate::layout::{self, InfoLine};
+use crate::text;
 use rustfetch_core::config::{default_icon_for_module, Config, ModuleConfig};
 use rustfetch_core::{detect_all, Module};
 use serde::Serialize;
@@ -14,7 +18,11 @@ pub struct JsonModuleOutput {
     pub icon: Option<String>,
 }
 
-pub fn run_json(config: &Config, modules: &[Box<dyn Module>], configs: &[ModuleConfig]) {
+pub fn run_json(
+    config: &Config,
+    modules: &[Box<dyn Module>],
+    configs: &[ModuleConfig],
+) -> Result<(), String> {
     let results = detect_all(modules);
     let mut outputs = Vec::new();
 
@@ -57,9 +65,12 @@ pub fn run_json(config: &Config, modules: &[Box<dyn Module>], configs: &[ModuleC
         });
     }
 
-    if let Ok(json_str) = serde_json::to_string_pretty(&outputs) {
-        println!("{json_str}");
+    let json_str = serde_json::to_string_pretty(&outputs)
+        .map_err(|error| format!("failed to serialize JSON output: {error}"))?;
+    if !text::write_stdout_line(&json_str) {
+        return Err("failed to write output to stdout".to_string());
     }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -99,13 +110,13 @@ pub fn generate_waybar_json(
     let right_lines = layout::build_right_lines(info_lines, &render_opts);
     let tooltip_lines: Vec<String> = right_lines
         .into_iter()
-        .map(|l| layout::strip_ansi(&l))
+        .map(|line| layout::strip_ansi(&line))
         .collect();
     let tooltip = tooltip_lines.join("\n").trim().to_string();
 
     let raw_text = if let Some(os_line) = info_lines
         .iter()
-        .find(|l| l.label.eq_ignore_ascii_case("os"))
+        .find(|line| line.label.eq_ignore_ascii_case("os"))
     {
         let clean_val = layout::strip_ansi(&os_line.value);
         if let Some(icon) = &os_line.icon {
@@ -115,7 +126,7 @@ pub fn generate_waybar_json(
         }
     } else if let Some(first_line) = info_lines
         .iter()
-        .find(|l| !l.value.is_empty() && !l.label.starts_with("---DIVIDER"))
+        .find(|line| !line.value.is_empty() && !line.label.starts_with("---DIVIDER"))
     {
         let clean_val = layout::strip_ansi(&first_line.value);
         if let Some(icon) = &first_line.icon {
@@ -137,10 +148,41 @@ pub fn generate_waybar_json(
     serde_json::to_string(&output).unwrap_or_default()
 }
 
-pub fn run_waybar(config: &Config, info_lines: &[InfoLine], header: Option<&str>) {
+pub fn run_waybar(
+    config: &Config,
+    info_lines: &[InfoLine],
+    header: Option<&str>,
+) -> Result<(), String> {
     let json_str = generate_waybar_json(config, info_lines, header);
-    if !json_str.is_empty() {
-        println!("{json_str}");
+    if json_str.is_empty() {
+        return Err("failed to serialize waybar output".to_string());
+    }
+    if !text::write_stdout_line(&json_str) {
+        return Err("failed to write output to stdout".to_string());
+    }
+    Ok(())
+}
+
+/// Unit multipliers (in bytes) for the size units emitted by the modules.
+fn unit_multiplier(unit: &str) -> f64 {
+    if unit.starts_with("kib") {
+        1024.0
+    } else if unit.starts_with("mib") {
+        1024.0 * 1024.0
+    } else if unit.starts_with("gib") {
+        1024.0 * 1024.0 * 1024.0
+    } else if unit.starts_with("tib") {
+        1024.0 * 1024.0 * 1024.0 * 1024.0
+    } else if unit.starts_with("kb") {
+        1000.0
+    } else if unit.starts_with("mb") {
+        1000.0 * 1000.0
+    } else if unit.starts_with("gb") {
+        1000.0 * 1000.0 * 1000.0
+    } else if unit.starts_with("tb") {
+        1000.0 * 1000.0 * 1000.0 * 1000.0
+    } else {
+        1.0
     }
 }
 
@@ -163,16 +205,7 @@ pub fn extract_percentage(val: &str) -> Option<u8> {
             let mut words = s.split_whitespace();
             let n = words.next()?.parse::<f64>().ok()?;
             let unit = words.next().map(|u| u.to_lowercase()).unwrap_or_default();
-            let mult = if unit.starts_with("gib") {
-                1024.0 * 1024.0
-            } else if unit.starts_with("mib") {
-                1024.0
-            } else if unit.starts_with("tib") {
-                1024.0 * 1024.0 * 1024.0
-            } else {
-                1.0
-            };
-            Some(n * mult)
+            Some(n * unit_multiplier(&unit))
         };
         if let (Some(used), Some(total)) = (parse_num(left.trim()), parse_num(right.trim())) {
             if total > 0.0 {
@@ -214,13 +247,23 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_percentage_mixed_units() {
+        // Binary and decimal units must be scaled to bytes before dividing.
+        assert_eq!(extract_percentage("512 MiB / 1 GiB"), Some(50));
+        assert_eq!(extract_percentage("1 GiB / 2 GiB"), Some(50));
+        assert_eq!(extract_percentage("1 GB / 2 GB"), Some(50));
+        assert_eq!(extract_percentage("500 MB / 1 GiB"), Some(47));
+        assert_eq!(extract_percentage("1 KiB / 1 MiB"), Some(0));
+    }
+
+    #[test]
     fn test_generate_waybar_json() {
         let config = Config::default();
         let lines = vec![
             InfoLine {
                 label: "OS".into(),
                 value: "Arch Linux".into(),
-                icon: Some("".into()),
+                icon: Some("x".into()),
                 color: "".into(),
             },
             InfoLine {
@@ -234,5 +277,7 @@ mod tests {
         assert!(json_str.contains("\"class\":\"rustfetch\""));
         assert!(json_str.contains("Arch Linux"));
         assert!(json_str.contains("2h 15m"));
+        // Waybar requires a single line of JSON.
+        assert!(!json_str.contains('\n'));
     }
 }

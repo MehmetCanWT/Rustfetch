@@ -2,7 +2,6 @@ use std::fmt::Write as _;
 use std::io::Write;
 
 use fast_image_resize as fr;
-use image::ImageReader;
 
 use crate::terminal;
 pub use crate::terminal::{is_tmux, wrap_tmux_passthrough};
@@ -52,7 +51,7 @@ pub fn encode_sixel(rgba_data: &[u8], width: u32, height: u32) -> String {
         return String::new();
     }
 
-    let mut out = String::with_capacity(total_pixels);
+    let mut out = String::with_capacity((total_pixels * 2).max(4096));
 
     // DCS q (Sixel graphic intro with aspect ratio 1:1 and dimensions)
     let _ = write!(out, "\x1bPq\"1;1;{width};{height}");
@@ -172,7 +171,7 @@ pub fn render_sixel_ex(
     target_cols: usize,
     max_rows: Option<usize>,
 ) -> Option<(usize, usize)> {
-    let img_reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let img_reader = crate::image::open_image_reader(path)?;
     let rgba_img = img_reader.decode().ok()?.to_rgba8();
 
     let orig_width = rgba_img.width();
@@ -181,15 +180,27 @@ pub fn render_sixel_ex(
         return None;
     }
 
-    let (cell_w, cell_h) = terminal::get_cell_size().unwrap_or((9, 18));
+    let (cell_w, cell_h) = terminal::cell_size_or_default();
     let cell_w = cell_w.max(1) as u32;
     let cell_h = cell_h.max(1) as u32;
 
     let (fit_cols, fit_rows) =
         crate::image::fit_cell_dimensions(orig_width, orig_height, target_cols, max_rows);
 
-    let target_px_width = (fit_cols as u32) * cell_w;
-    let target_px_height = (fit_rows as u32) * cell_h;
+    // Shared clamp keeps sixel payloads inside the 2000x4000 pixel budget and
+    // aligned to whole terminal cells.
+    let (target_px_width, target_px_height) = crate::image::clamp_pixel_dims(
+        fit_cols * cell_w as usize,
+        fit_rows * cell_h as usize,
+        target_cols,
+        max_rows,
+        cell_w as usize,
+        cell_h as usize,
+    );
+    let target_px_width = target_px_width as u32;
+    let target_px_height = target_px_height as u32;
+    let fit_cols = (target_px_width / cell_w).max(1) as usize;
+    let fit_rows = (target_px_height / cell_h).max(1) as usize;
 
     let buf = crate::image::resize_rgba(
         rgba_img.into_raw(),

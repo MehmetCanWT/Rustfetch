@@ -1,7 +1,6 @@
 use std::fmt::Write as _;
 
 use fast_image_resize as fr;
-use image::ImageReader;
 
 // Braille dot offsets: (dy, dx, bit)
 // Dot 1: (0,0), Dot 2: (1,0), Dot 3: (2,0), Dot 4: (0,1), Dot 5: (1,1), Dot 6: (2,1), Dot 7: (3,0), Dot 8: (3,1)
@@ -22,7 +21,7 @@ pub fn render_braille_ex(
     target_rows: Option<usize>,
     preserve_aspect_ratio: bool,
 ) -> Option<Vec<String>> {
-    let img_reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let img_reader = crate::image::open_image_reader(path)?;
     let img = img_reader.decode().ok()?.to_rgba8();
 
     let orig_width = img.width();
@@ -59,27 +58,11 @@ pub fn render_braille_ex(
         }
     };
 
-    let mut pixel_cols = if pixel_cols % 2 != 0 {
-        pixel_cols + 1
-    } else {
-        pixel_cols
-    };
-    let mut pixel_rows = if pixel_rows % 4 != 0 {
-        pixel_rows + (4 - pixel_rows % 4)
-    } else {
-        pixel_rows
-    };
-
-    let max_cols_px = target_cols * 2;
-    if pixel_cols > max_cols_px {
-        pixel_cols = max_cols_px;
-    }
-    if let Some(mr) = target_rows {
-        let max_rows_px = mr * 4;
-        if pixel_rows > max_rows_px {
-            pixel_rows = max_rows_px;
-        }
-    }
+    // Shared clamp: 2x4 braille sub-pixels, bounded by the terminal box and
+    // the global 2000x4000 pixel budget. Missing/zero row limits fall back to
+    // a 24 row default instead of returning nothing.
+    let (pixel_cols, pixel_rows) =
+        crate::image::clamp_pixel_dims(pixel_cols, pixel_rows, target_cols, target_rows, 2, 4);
 
     let raw = crate::image::resize_rgba(
         img.into_raw(),
@@ -162,8 +145,11 @@ pub fn render_braille_ex(
             } else {
                 // Luminance-based dot threshold for opaque images
                 let avg_lum = total_lum / 8;
+                // Low-contrast (dark backgrounds, flattened JPEG logos) must still
+                // show dots instead of a completely empty logo. The threshold sits
+                // just below the image's average luminance with a hard floor.
                 let threshold = if max_lum - min_lum < 16 {
-                    img_avg_lum.saturating_add(15) // Clean background cutoff
+                    img_avg_lum.saturating_sub(8).max(4)
                 } else {
                     avg_lum.max(25) // Edge contrast cutoff
                 };
@@ -255,5 +241,48 @@ mod tests {
             non_space,
             "Dark transparent pixels must produce solid braille dots"
         );
+    }
+
+    fn write_braille_png(name: &str, width: u32, height: u32, rgb: [u8; 3]) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "rustfetch_braille_test_{}_{}.png",
+            name,
+            std::process::id()
+        ));
+        let img =
+            image::RgbaImage::from_pixel(width, height, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+        img.save(&path).expect("write braille test png");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn test_braille_dark_opaque_image_is_not_empty() {
+        // Regression: low-contrast dark logos previously rendered as blank.
+        let path = write_braille_png("dark_opaque", 16, 16, [30, 30, 30]);
+        let lines = render_braille(&path, 4).expect("must render dark image");
+        let _ = std::fs::remove_file(&path);
+        let braille = lines
+            .iter()
+            .flat_map(|line| line.chars())
+            .filter(|ch| ('\u{2800}'..='\u{28ff}').contains(ch))
+            .count();
+        assert!(braille > 0, "dark opaque image must produce braille dots");
+    }
+
+    #[test]
+    fn test_braille_zero_height_is_clamped() {
+        let image = format!("{}/../images/arch.png", env!("CARGO_MANIFEST_DIR"));
+        let lines = render_braille_ex(&image, 8, Some(0), true).expect("must render");
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_braille_tall_image_is_rejected_without_expanding() {
+        let path = write_braille_png("tall_braille", 1, 200_000, [30, 30, 30]);
+        let start = std::time::Instant::now();
+        let rendered = render_braille_ex(&path, 12, None, true);
+        let _ = std::fs::remove_file(&path);
+        assert!(rendered.is_none(), "oversized tall image must be rejected");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 }

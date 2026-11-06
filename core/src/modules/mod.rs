@@ -34,11 +34,63 @@ pub mod update;
 pub mod uptime;
 pub mod wifi;
 
+/// Canonical module identifiers understood by `module_by_name`, in display order.
+///
+/// This is the single source of truth used by `--list-modules` and by the
+/// documentation consistency tests.
+pub const MODULE_NAMES: &[&str] = &[
+    "os",
+    "os_age",
+    "host",
+    "board",
+    "kernel",
+    "uptime",
+    "packages",
+    "shell",
+    "desktop",
+    "font",
+    "terminal",
+    "cpu",
+    "cpu_usage",
+    "temp",
+    "gpu",
+    "dgpu",
+    "igpu",
+    "gpu_driver",
+    "memory",
+    "swap",
+    "disk",
+    "battery",
+    "power_profile",
+    "brightness",
+    "display",
+    "sound",
+    "media",
+    "bluetooth",
+    "wifi",
+    "net_io",
+    "local_ip",
+    "locale",
+    "processes",
+    "init",
+    "container",
+    "update",
+    "custom",
+    "break",
+    "divider",
+];
+
+/// Returns the canonical module identifier list.
+pub fn module_names() -> &'static [&'static str] {
+    MODULE_NAMES
+}
+
 use crate::Module;
 
 pub fn all_modules() -> Vec<Box<dyn Module>> {
     [
         "os",
+        "os_age",
         "host",
         "board",
         "kernel",
@@ -51,14 +103,17 @@ pub fn all_modules() -> Vec<Box<dyn Module>> {
         "cpu",
         "temp",
         "gpu",
+        "gpu_driver",
         "memory",
         "swap",
         "disk",
         "battery",
+        "power_profile",
         "brightness",
         "display",
         "sound",
         "wifi",
+        "net_io",
         "local_ip",
         "locale",
         "processes",
@@ -158,15 +213,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_all_modules_does_not_contain_media() {
+    fn test_all_modules_contains_standard_fast_modules_without_slow_or_forking_ones() {
         let all = all_modules();
         let names: Vec<&str> = all.iter().map(|m| m.name()).collect();
-        assert!(names.contains(&"temp"));
-        assert!(names.contains(&"sound"));
-        assert!(names.contains(&"brightness"));
-        assert!(names.contains(&"init"));
-        assert!(names.contains(&"container"));
+        for expected in [
+            "os",
+            "os_age",
+            "host",
+            "board",
+            "kernel",
+            "uptime",
+            "packages",
+            "shell",
+            "desktop",
+            "font",
+            "terminal",
+            "cpu",
+            "temp",
+            "gpu",
+            "gpu_driver",
+            "memory",
+            "swap",
+            "disk",
+            "battery",
+            "power_profile",
+            "brightness",
+            "display",
+            "sound",
+            "wifi",
+            "net_io",
+            "local_ip",
+            "locale",
+            "processes",
+            "init",
+            "container",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "all_modules() is missing '{expected}'"
+            );
+        }
+        // Slow / process-spawning modules are opt-in only.
         assert!(!names.contains(&"media"));
+        assert!(!names.contains(&"cpu_usage"));
+    }
+
+    #[test]
+    fn test_module_names_are_all_resolvable() {
+        for name in module_names() {
+            assert!(
+                module_by_name(name).is_some(),
+                "module_names() lists '{name}' but module_by_name() cannot build it"
+            );
+            assert!(
+                crate::config::is_known_module_name(name),
+                "config validation must accept the canonical module name '{name}'"
+            );
+        }
     }
 
     #[test]

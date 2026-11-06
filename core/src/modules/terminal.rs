@@ -74,9 +74,6 @@ fn read_terminal() -> Option<String> {
     if std::env::var("WARP_IS_LOCAL_SHELL_SESSION").is_ok() {
         return Some("Warp".to_string());
     }
-    if std::env::var("VTE_VERSION").is_ok() {
-        return Some("GNOME Terminal".to_string());
-    }
     if let Ok(emu) = std::env::var("TERMINAL_EMULATOR") {
         let trimmed = emu.trim();
         if !trimmed.is_empty() {
@@ -86,6 +83,12 @@ fn read_terminal() -> Option<String> {
     #[cfg(target_os = "linux")]
     if let Some(proc_name) = detect_terminal_from_process() {
         return Some(proc_name);
+    }
+    // VTE_VERSION is exported by every VTE-based terminal (Ptyxis, Tilix,
+    // Terminator, XFCE Terminal, ...), so it only identifies the generic VTE
+    // family and only after the process tree failed to name a concrete emulator.
+    if std::env::var("VTE_VERSION").is_ok() {
+        return Some("VTE".to_string());
     }
     parse_terminal(None, None, None, std::env::var("TERM").ok().as_deref())
 }
@@ -107,50 +110,69 @@ pub fn format_terminal_name(raw: &str) -> String {
     }
 }
 
+/// Maps a `/proc/<pid>/comm` value to a terminal name.
+///
+/// The kernel truncates command names to 15 characters, so long names such as
+/// `gnome-terminal-server` appear as `gnome-terminal-`; prefix matching keeps
+/// those probes working.
+pub fn match_terminal_comm(name: &str) -> Option<&'static str> {
+    let name = name.trim().to_lowercase();
+    if name.is_empty() {
+        return None;
+    }
+    for (prefix, terminal) in [
+        ("gnome-terminal", "GNOME Terminal"),
+        ("ptyxis", "Ptyxis"),
+        ("kgx", "GNOME Console"),
+        ("konsole", "Konsole"),
+        ("kitty", "kitty"),
+        ("alacritty", "Alacritty"),
+        ("ghostty", "Ghostty"),
+        ("wezterm", "WezTerm"),
+        ("footclient", "foot"),
+        ("foot", "foot"),
+        ("xfce4-terminal", "XFCE Terminal"),
+        ("mate-terminal", "MATE Terminal"),
+        ("terminator", "Terminator"),
+        ("tilix", "Tilix"),
+        ("blackbox", "BlackBox"),
+        ("contour", "Contour"),
+        ("urxvt", "urxvt"),
+        ("rxvt-unicode", "urxvt"),
+        ("xterm", "xterm"),
+        ("qterminal", "QTerminal"),
+        ("lxterminal", "LXTerminal"),
+        ("guake", "Guake"),
+        ("yakuake", "Yakuake"),
+        ("tilda", "Tilda"),
+        ("tabby", "Tabby"),
+        ("warp-terminal", "Warp"),
+        ("warp", "Warp"),
+        ("hyper", "Hyper"),
+        ("rio", "Rio"),
+        ("st-256color", "st"),
+    ] {
+        if name.starts_with(prefix) {
+            return Some(terminal);
+        }
+    }
+    if name == "st" {
+        return Some("st");
+    }
+    None
+}
+
 #[cfg(target_os = "linux")]
 fn detect_terminal_from_process() -> Option<String> {
     use std::fs;
-    let mut pid = unsafe { libc::getppid() };
+    let mut pid = std::os::unix::process::parent_id();
     for _ in 0..6 {
         if pid <= 1 {
             break;
         }
-        let comm_path = format!("/proc/{pid}/comm");
-        if let Ok(comm) = fs::read_to_string(&comm_path) {
-            let name = comm.trim();
-            let lower = name.to_lowercase();
-            let matched = match lower.as_str() {
-                "ptyxis" | "ptyxis-agent" => Some("Ptyxis"),
-                "gnome-terminal" | "gnome-terminal-server" => Some("GNOME Terminal"),
-                "kgx" => Some("GNOME Console"),
-                "konsole" => Some("Konsole"),
-                "kitty" => Some("kitty"),
-                "alacritty" => Some("Alacritty"),
-                "ghostty" => Some("Ghostty"),
-                "foot" | "footclient" => Some("foot"),
-                "wezterm-gui" | "wezterm" => Some("WezTerm"),
-                "xfce4-terminal" => Some("XFCE Terminal"),
-                "mate-terminal" => Some("MATE Terminal"),
-                "terminator" => Some("Terminator"),
-                "tilix" => Some("Tilix"),
-                "blackbox" => Some("BlackBox"),
-                "rio" => Some("Rio"),
-                "contour" => Some("Contour"),
-                "urxvt" | "rxvt-unicode" => Some("urxvt"),
-                "xterm" => Some("xterm"),
-                "st" | "st-256color" => Some("st"),
-                "hyper" => Some("Hyper"),
-                "tabby" => Some("Tabby"),
-                "warp" | "warp-terminal" => Some("Warp"),
-                "qterminal" => Some("QTerminal"),
-                "lxterminal" => Some("LXTerminal"),
-                "guake" => Some("Guake"),
-                "yakuake" => Some("Yakuake"),
-                "tilda" => Some("Tilda"),
-                _ => None,
-            };
-            if let Some(m) = matched {
-                return Some(m.to_string());
+        if let Ok(comm) = fs::read_to_string(format!("/proc/{pid}/comm")) {
+            if let Some(name) = match_terminal_comm(&comm) {
+                return Some(name.to_string());
             }
         }
         let status_path = format!("/proc/{pid}/status");
@@ -158,7 +180,7 @@ fn detect_terminal_from_process() -> Option<String> {
             let mut next_pid = None;
             for line in status.lines() {
                 if let Some(rest) = line.strip_prefix("PPid:\t") {
-                    if let Ok(p) = rest.trim().parse::<libc::pid_t>() {
+                    if let Ok(p) = rest.trim().parse::<u32>() {
                         next_pid = Some(p);
                         break;
                     }
@@ -252,5 +274,31 @@ mod tests {
         assert_eq!(format_terminal_name("wezterm"), "WezTerm");
         assert_eq!(format_terminal_name("warpterminal"), "Warp");
         assert_eq!(format_terminal_name("custom_term"), "custom_term");
+    }
+
+    #[test]
+    fn test_match_terminal_comm_handles_15_char_truncation() {
+        // /proc/<pid>/comm for gnome-terminal-server is truncated by the kernel.
+        assert_eq!(
+            match_terminal_comm("gnome-terminal-"),
+            Some("GNOME Terminal")
+        );
+        assert_eq!(
+            match_terminal_comm("gnome-terminal-server"),
+            Some("GNOME Terminal")
+        );
+        assert_eq!(match_terminal_comm("welp"), None);
+        assert_eq!(match_terminal_comm(""), None);
+    }
+
+    #[test]
+    fn test_match_terminal_comm_names() {
+        assert_eq!(match_terminal_comm("kitty"), Some("kitty"));
+        assert_eq!(match_terminal_comm("Alacritty\n"), Some("Alacritty"));
+        assert_eq!(match_terminal_comm("xfce4-terminal"), Some("XFCE Terminal"));
+        assert_eq!(match_terminal_comm("wezterm-gui"), Some("WezTerm"));
+        assert_eq!(match_terminal_comm("st"), Some("st"));
+        assert_eq!(match_terminal_comm("st-256color"), Some("st"));
+        assert_eq!(match_terminal_comm("code"), None);
     }
 }

@@ -9,10 +9,7 @@ impl Module for DesktopModule {
     }
 
     fn detect(&self) -> Option<Info> {
-        let de = env::var("XDG_CURRENT_DESKTOP")
-            .or_else(|_| env::var("DESKTOP_SESSION"))
-            .unwrap_or_default();
-
+        let de = desktop_environment();
         let wm_type = env::var("WAYLAND_DISPLAY")
             .map(|_| "Wayland".to_string())
             .or_else(|_| env::var("XDG_SESSION_TYPE"))
@@ -24,6 +21,79 @@ impl Module for DesktopModule {
 
         Some(Info::new("Desktop", value))
     }
+}
+
+/// Resolves the desktop environment name.
+///
+/// `XDG_CURRENT_DESKTOP` is a colon-separated list (`ubuntu:GNOME`), so the most
+/// specific token is used; `DESKTOP_SESSION` is often a full absolute path
+/// (`/usr/share/wayland-sessions/plasma.desktop`) and is reduced to its stem.
+fn desktop_environment() -> String {
+    if let Ok(value) = env::var("XDG_CURRENT_DESKTOP") {
+        if let Some(name) = preferred_desktop_from_list(&value) {
+            return name;
+        }
+    }
+    if let Ok(value) = env::var("DESKTOP_SESSION") {
+        if let Some(name) = normalize_desktop_name(&value) {
+            return name;
+        }
+    }
+    String::new()
+}
+
+/// Picks the most specific (last non-empty) entry of a colon-separated
+/// `XDG_CURRENT_DESKTOP` value.
+pub fn preferred_desktop_from_list(raw: &str) -> Option<String> {
+    raw.split(':')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .filter_map(normalize_desktop_name)
+        .next_back()
+}
+
+/// Normalizes a desktop/session identifier: strips any directory path and the
+/// `.desktop` suffix, then maps common identifiers to display names
+/// (`plasma` -> `KDE`, `gnome` -> `GNOME`, ...).
+pub fn normalize_desktop_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let stem = std::path::Path::new(trimmed)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(trimmed)
+        .trim();
+    if stem.is_empty() {
+        return None;
+    }
+    let key = stem.to_lowercase();
+    let display = match key.as_str() {
+        "plasma" | "plasmawayland" | "plasma-x11" | "kde" | "kde-plasma" | "kde5" | "kde6" => "KDE",
+        "gnome" | "gnome-xorg" | "gnome-wayland" | "gnome-classic" | "ubuntu" => "GNOME",
+        "xfce" | "xfce4" | "xfce-session" => "XFCE",
+        "cinnamon" | "cinnamon2d" => "Cinnamon",
+        "mate" => "MATE",
+        "lxqt" => "LXQt",
+        "lxde" => "LXDE",
+        "budgie" | "budgie-desktop" => "Budgie",
+        "pantheon" => "Pantheon",
+        "cosmic" | "cosmic-session" => "COSMIC",
+        "sway" => "Sway",
+        "hyprland" => "Hyprland",
+        "niri" => "Niri",
+        "i3" => "i3",
+        "openbox" => "Openbox",
+        "fluxbox" => "Fluxbox",
+        "deepin" => "Deepin",
+        "enlightenment" => "Enlightenment",
+        "icewm" => "IceWM",
+        "ukui" => "UKUI",
+        "unity" => "Unity",
+        _ => return Some(stem.to_string()),
+    };
+    Some(display.to_string())
 }
 
 pub fn format_desktop(de: &str, wm_name: &str, wm_type: &str) -> Option<String> {
@@ -217,5 +287,36 @@ mod tests {
             Some("KWin".to_string())
         );
         assert_eq!(get_wm_from_names("custom_nonexistent", "other"), None);
+    }
+
+    #[test]
+    fn test_normalize_desktop_name() {
+        assert_eq!(
+            normalize_desktop_name("/usr/share/wayland-sessions/plasma.desktop").as_deref(),
+            Some("KDE")
+        );
+        assert_eq!(normalize_desktop_name("plasma").as_deref(), Some("KDE"));
+        assert_eq!(normalize_desktop_name("gnome").as_deref(), Some("GNOME"));
+        assert_eq!(normalize_desktop_name("xfce").as_deref(), Some("XFCE"));
+        assert_eq!(normalize_desktop_name("sway").as_deref(), Some("Sway"));
+        assert_eq!(
+            normalize_desktop_name("/usr/share/xsessions/i3.desktop").as_deref(),
+            Some("i3")
+        );
+        assert_eq!(
+            normalize_desktop_name("unknown-de").as_deref(),
+            Some("unknown-de")
+        );
+        assert_eq!(normalize_desktop_name("   "), None);
+    }
+
+    #[test]
+    fn test_preferred_desktop_from_list() {
+        assert_eq!(
+            preferred_desktop_from_list("ubuntu:GNOME").as_deref(),
+            Some("GNOME")
+        );
+        assert_eq!(preferred_desktop_from_list("KDE").as_deref(), Some("KDE"));
+        assert_eq!(preferred_desktop_from_list("  : ").as_deref(), None);
     }
 }

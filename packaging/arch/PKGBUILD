@@ -1,6 +1,19 @@
 # Maintainer: MehmetCanWT <https://github.com/MehmetCanWT/rustfetch>
+#
+# Changelog:
+#   0.1.5 - 2026-11-06 - "Ragdoll": sync pkgver with Cargo.toml / v0.1.5 tag.
+#   0.1.4 - 2026-11-06 - "Siamese": sync pkgver with Cargo.toml / v0.1.4 tag,
+#                        real sha256 for the GitHub tarball, workspace-wide check.
+#   0.1.2 - previous packaged release.
+#
+# sha256sums corresponds to:
+#   curl -fsSL "https://github.com/MehmetCanWT/rustfetch/archive/refs/tags/v$pkgver.tar.gz" | sha256sum
+# Re-run that command (and update the value below) whenever pkgver is bumped.
+# GitHub's generated archive tarballs are content-addressed by tag; if GitHub
+# ever regenerates archives for old tags, refresh the checksum in the same commit
+# that bumps pkgver.
 pkgname=rustfetch
-pkgver=0.1.2
+pkgver=0.1.5
 pkgrel=1
 pkgdesc="A blazing-fast, memory-safe system fetch tool written in Rust"
 arch=('x86_64' 'aarch64')
@@ -30,7 +43,7 @@ build() {
 
 check() {
     cd "$pkgname-$pkgver"
-    cargo test --frozen --all
+    cargo test --frozen --workspace
 }
 
 package() {

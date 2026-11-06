@@ -18,6 +18,10 @@ on:
       - 'LICENSE'
       - '.gitignore'
 
+# Least privilege: CI only needs to read the repository.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -27,11 +31,12 @@ env:
 
 jobs:
   test:
+    name: Test (stable)
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -44,7 +49,65 @@ jobs:
       run: cargo fmt --all -- --check
 
     - name: Clippy Lint
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
     - name: Run Tests
-      run: cargo test --all
+      run: cargo test --workspace --locked
+
+    - name: Release Build
+      run: cargo build --workspace --release --locked
+
+  msrv:
+    name: MSRV (1.88)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust 1.88 (workspace rust-version)
+      uses: dtolnay/rust-toolchain@1.88.0
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Check MSRV
+      # Every dependency and every workspace member must build on the declared
+      # minimum supported Rust version (see [workspace.package] rust-version).
+      run: cargo check --workspace --all-targets --locked
+
+  deny:
+    name: Dependency Policy
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: cargo deny check
+      # Validates advisories, licenses, bans and sources from deny.toml.
+      uses: EmbarkStudios/cargo-deny-action@v2
+      with:
+        command: check
+        arguments: --all-features
+
+  lint:
+    name: Lint Workflows & Scripts
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install ShellCheck
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq shellcheck
+
+    - name: ShellCheck install.sh and scripts/*.sh
+      # Only error/warning findings fail the build; pre-existing style/info
+      # findings (e.g. SC2086) are still printed for visibility.
+      run: shellcheck --severity=warning --color=always install.sh scripts/*.sh
+
+    - name: actionlint
+      # Lints the workflow YAML itself (syntax, expressions, known action inputs).
+      # ShellCheck integration is disabled here because shell style is enforced
+      # by the dedicated ShellCheck step above.
+      run: docker run --rm -v "$PWD:/repo" -w /repo --network none rhysd/actionlint:latest -color -shellcheck=

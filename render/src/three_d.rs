@@ -1,29 +1,44 @@
 /// Shading mode determining how sub-cells are sampled and rasterized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShadingMode {
-    /// 1x1 sub-cell using standard ASCII characters: .,-~:;=!*#$@
+    /// 1x1 sub-cell using standard ASCII characters.
     #[default]
     Ascii,
-    /// 2x2 sub-cell using quadrant block elements: ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█
+    /// 2x2 sub-cell using quadrant block elements.
     Blocks,
-    /// 2x3 sub-cell using Unicode legacy computing sextant blocks (U+1FB00..U+1FB3B)
+    /// 2x3 sub-cell using Unicode legacy computing sextant blocks (U+1FB00..U+1FB3B).
     Sextants,
+    /// 2x4 sub-cell using Unicode braille patterns (U+2800..U+28FF).
+    Braille,
+    /// 1x1 sub-cell using a dot ramp.
+    Dot,
+    /// 1x1 silhouette outline using box drawing characters.
+    Wireframe,
+    /// 1x1 solid full blocks.
+    Solid,
 }
 
 impl ShadingMode {
     pub fn from_str_loose(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "blocks" | "block" | "quadrants" | "halfblock" | "halfblocks" => Self::Blocks,
-            "sextants" | "sextant" | "braille" => Self::Sextants,
+        match s.trim().to_lowercase().replace(['_', ' '], "-").as_str() {
+            "blocks" | "block" | "quadrants" | "quadrant" | "halfblock" | "halfblocks" => {
+                Self::Blocks
+            }
+            "sextants" | "sextant" => Self::Sextants,
+            "braille" | "braille-dots" => Self::Braille,
+            "dot" | "dots" | "dotted" => Self::Dot,
+            "wireframe" | "wire" | "wire-frame" => Self::Wireframe,
+            "solid" | "filled" => Self::Solid,
             _ => Self::Ascii,
         }
     }
 
     pub fn sub_grid(&self) -> (usize, usize) {
         match self {
-            Self::Ascii => (1, 1),
+            Self::Ascii | Self::Dot | Self::Wireframe | Self::Solid => (1, 1),
             Self::Blocks => (2, 2),
             Self::Sextants => (3, 2), // (rows, cols)
+            Self::Braille => (4, 2),  // (rows, cols)
         }
     }
 }
@@ -31,12 +46,14 @@ impl ShadingMode {
 pub const RAMP_ASCII: &str = ".,-~:;=!*#$@";
 pub const RAMP_BLOCKS: &str = "░▒▓█";
 
+/// Glyph ramp used by the dot shading mode.
+const DOT_RAMP: [&str; 3] = ["·", "•", "●"];
+
 /// Quadrant block glyphs indexed by 4-bit bitmask (bit 0 = top-left .. bit 3 = bottom-right).
 const QUADRANT_GLYPHS: [&str; 16] = [
     " ", "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█",
 ];
 
-/// Precomputed table of 64 Unicode sextant glyphs (U+1FB00..U+1FB3B).
 fn build_sextant_table() -> Vec<String> {
     let mut table = Vec::with_capacity(64);
     for mask in 0..64 {
@@ -63,6 +80,85 @@ fn build_sextant_table() -> Vec<String> {
         }
     }
     table
+}
+
+fn braille_bit(sr: usize, sc: usize) -> u8 {
+    match (sc, sr) {
+        (0, 0) => 0x01,
+        (0, 1) => 0x02,
+        (0, 2) => 0x04,
+        (0, 3) => 0x40,
+        (1, 0) => 0x08,
+        (1, 1) => 0x10,
+        (1, 2) => 0x20,
+        (1, 3) => 0x80,
+        _ => 0,
+    }
+}
+
+fn braille_char(mask: u8) -> char {
+    std::char::from_u32(0x2800 + mask as u32).unwrap_or(' ')
+}
+
+fn char_str(ch: char, buf: &mut [u8; 4]) -> &str {
+    ch.encode_utf8(buf)
+}
+
+fn wire_glyph(up: bool, down: bool, left: bool, right: bool) -> Option<char> {
+    match (up, down, left, right) {
+        (true, true, true, true) => Some('┼'),
+        (true, true, false, false) => Some('│'),
+        (false, false, true, true) => Some('─'),
+        (true, true, false, true) => Some('├'),
+        (true, true, true, false) => Some('┤'),
+        (false, true, true, true) => Some('┬'),
+        (true, false, true, true) => Some('┴'),
+        (false, true, false, true) => Some('┌'),
+        (false, true, true, false) => Some('┐'),
+        (true, false, false, true) => Some('└'),
+        (true, false, true, false) => Some('┘'),
+        (false, true, false, false) => Some('│'),
+        (true, false, false, false) => Some('│'),
+        (false, false, false, true) => Some('─'),
+        (false, false, true, false) => Some('─'),
+        (false, false, false, false) => None,
+    }
+}
+
+fn default_ramp(mode: ShadingMode) -> Vec<String> {
+    let ramp = match mode {
+        ShadingMode::Blocks | ShadingMode::Sextants => RAMP_BLOCKS,
+        _ => RAMP_ASCII,
+    };
+    ramp.chars().map(|c| c.to_string()).collect()
+}
+
+pub fn sanitize_finite(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
+}
+
+pub fn sanitize_size_scale(value: f32) -> f32 {
+    sanitize_finite(value, 1.0).clamp(0.1, 3.0)
+}
+
+pub fn sanitize_depth_scale(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value.clamp(0.01, 100.0)
+    } else {
+        1.0
+    }
+}
+
+pub fn sanitize_speed(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value.clamp(0.05, 5.0)
+    } else {
+        1.0
+    }
 }
 
 /// Computes ink density / height for a UTF-8 character.
@@ -96,23 +192,15 @@ pub fn char_weight_utf8(ch: char) -> f32 {
         };
     }
 
-    // Common Unicode blocks
     match u {
-        // Full block █
         0x2588 => 1.00,
-        // Shades: Dark ▓, Medium ▒, Light ░
         0x2593 => 0.75,
         0x2592 => 0.50,
         0x2591 => 0.25,
-        // Half blocks: ▀ ▄ ▌ ▐
         0x2580 | 0x2584 | 0x258C | 0x2590 => 0.50,
-        // 3/4 blocks: ▛ ▜ ▙ ▟
         0x259B | 0x259C | 0x2599 | 0x259F => 0.75,
-        // 1/4 blocks: ▖ ▗ ▘ ▝
         0x2596 | 0x2597 | 0x2598 | 0x259D => 0.25,
-        // Box drawing characters (0x2500..0x257F)
         0x2500..=0x257F => 0.22,
-        // Braille patterns (0x2800..0x28FF)
         0x2800..=0x28FF => {
             let dots = (u & 0xFF).count_ones() as f32;
             (dots / 8.0).max(0.12)
@@ -140,7 +228,6 @@ pub struct Model3D {
     pub points: Vec<Point3D>,
     pub orig_rows: usize,
     pub orig_cols: usize,
-    pub has_ansi_colors: bool,
 }
 
 impl Model3D {
@@ -151,13 +238,13 @@ impl Model3D {
         depth_scale: f32,
         shading_mode: ShadingMode,
     ) -> Self {
+        let size_scale = sanitize_size_scale(size_scale);
+        let depth_scale = sanitize_depth_scale(depth_scale);
         let (sub_rows, _sub_cols) = shading_mode.sub_grid();
 
-        // Parse lines into cell characters and active ANSI color strings
         let mut raw_cells: Vec<Vec<char>> = Vec::new();
         let mut raw_colors: Vec<Vec<Option<String>>> = Vec::new();
         let mut max_cols = 0;
-        let mut has_ansi = false;
 
         for line in lines {
             let mut row_chars = Vec::new();
@@ -167,9 +254,8 @@ impl Model3D {
 
             while let Some(c) = chars.next() {
                 if c == '\x1b' && chars.peek() == Some(&'[') {
-                    // Collect ANSI sequence
                     let mut seq = String::from("\x1b[");
-                    chars.next(); // consume '['
+                    chars.next();
                     while let Some(&next) = chars.peek() {
                         seq.push(next);
                         chars.next();
@@ -181,7 +267,6 @@ impl Model3D {
                         if seq == "\x1b[0m" || seq == "\x1b[m" {
                             cur_color = None;
                         } else {
-                            // Map ANSI colors to 24-bit TrueColor so Kitty themes cannot override them
                             let tc_seq = match seq.as_str() {
                                 "\x1b[34m" | "\x1b[1;34m" => "\x1b[38;2;41;168;224m".to_string(),
                                 "\x1b[37m" | "\x1b[1;37m" => "\x1b[38;2;255;255;255m".to_string(),
@@ -197,7 +282,6 @@ impl Model3D {
                                 _ => seq,
                             };
                             cur_color = Some(tc_seq);
-                            has_ansi = true;
                         }
                     }
                     continue;
@@ -219,11 +303,9 @@ impl Model3D {
                 points: Vec::new(),
                 orig_rows: 0,
                 orig_cols: 0,
-                has_ansi_colors: false,
             };
         }
 
-        // Build heightmap
         let mut hmap = vec![vec![0.0f32; num_cols]; num_rows];
         let mut sum = 0.0f32;
         let mut sum2 = 0.0f32;
@@ -243,7 +325,6 @@ impl Model3D {
             }
         }
 
-        // Auto-scale depth if variance is low
         let mut effective_depth = depth_scale;
         if count > 0 {
             let mean = sum / count as f32;
@@ -266,7 +347,6 @@ impl Model3D {
         let cy = (num_rows as f32 - 1.0) * 0.5;
         let zmax = 0.18f32 * effective_depth * norm;
 
-        // Compute finite difference gradients for normals
         let mut gnx = vec![vec![0.0f32; num_cols]; num_rows];
         let mut gny = vec![vec![0.0f32; num_cols]; num_rows];
         let mut gnz = vec![vec![1.0f32; num_cols]; num_rows];
@@ -306,8 +386,9 @@ impl Model3D {
             }
         }
 
-        let z_layers = ((6.0 * size_scale) as usize).max(6);
-        let subdiv = ((size_scale * sub_rows as f32) as usize).max(sub_rows);
+        // Hard upper bounds keep a bad size_scale from exploding memory/CPU.
+        let z_layers = ((6.0 * size_scale) as usize).clamp(6, 48);
+        let subdiv = ((size_scale * sub_rows as f32) as usize).clamp(sub_rows, sub_rows * 4);
 
         let mut points = Vec::new();
 
@@ -325,7 +406,6 @@ impl Model3D {
                         let frow = row as f32 + (sr as f32 / subdiv as f32);
                         let fcol = col as f32 + (sc as f32 / subdiv as f32);
 
-                        // Bilinear interpolation of height
                         let ih = if sr > 0 || sc > 0 {
                             let fr = sr as f32 / subdiv as f32;
                             let fc = sc as f32 / subdiv as f32;
@@ -351,7 +431,6 @@ impl Model3D {
                         let oy = (cy - frow) * sy;
                         let zr = ih * zmax;
 
-                        // Check if edge cell
                         let mut is_edge = false;
                         for dr in -1i32..=1 {
                             for dc in -1i32..=1 {
@@ -442,7 +521,6 @@ impl Model3D {
             points,
             orig_rows: num_rows,
             orig_cols: num_cols,
-            has_ansi_colors: has_ansi,
         }
     }
 }
@@ -463,7 +541,6 @@ pub struct Renderer3D {
 impl Default for Renderer3D {
     fn default() -> Self {
         let (lx, ly, lz) = (0.4082f32, 0.8165f32, -0.4082f32);
-        // Blinn-Phong half vector with viewer at (0, 0, -1)
         let vx = 0.0f32;
         let vy = 0.0f32;
         let vz = -1.0f32;
@@ -474,60 +551,75 @@ impl Default for Renderer3D {
 
         Self {
             shading_mode: ShadingMode::Ascii,
-            shading_chars: RAMP_ASCII.chars().map(|c| c.to_string()).collect(),
+            shading_chars: default_ramp(ShadingMode::Ascii),
             sextant_table: build_sextant_table(),
             light_dir: (lx, ly, lz),
             half_dir: (hx / hlen, hy / hlen, hz / hlen),
             size_scale: 1.0,
             speed: 1.0,
-            outer_color: "\x1b[1;36m".to_string(), // bold cyan
-            inner_color: "\x1b[1;37m".to_string(), // bold white
+            outer_color: "\x1b[1;36m".to_string(),
+            inner_color: "\x1b[1;37m".to_string(),
         }
     }
 }
 
+fn normalize_distro_key(distro: &str) -> String {
+    distro
+        .trim()
+        .to_lowercase()
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Returns the (outer_color, inner_color) ANSI escape codes for a distribution.
-/// Returns the (outer_color, inner_color) ANSI escape codes for a distribution.
-/// Uses 24-bit TrueColor (RGB) escape sequences so that terminal emulators with active color themes
-/// (such as Kitty themes, Catppuccin, TokyoNight, etc.) do NOT override the official branding.
+///
+/// Matching is exact (after normalisation) so unrelated names that merely
+/// contain a distro token (for example Vanilla OS vs van) do not get the wrong
+/// branding. Uses 24-bit TrueColor so terminal themes cannot override the
+/// official branding colours.
 pub fn distro_3d_colors(distro: &str) -> (&'static str, &'static str) {
-    let d = distro.to_lowercase();
-    if d.contains("gentoo") {
-        ("\x1b[38;2;254;122;230m", "\x1b[38;2;255;255;255m") // vivid Gentoo pink outer (#fe7ae6), crisp pure white inner
-    } else if d.contains("arch") {
-        ("\x1b[38;2;23;147;209m", "\x1b[38;2;51;162;230m") // Arch cyan outer (#1793d1), light cyan inner (#33a2e6)
-    } else if d.contains("ubuntu") || d.contains("asahi") {
-        ("\x1b[38;2;233;84;32m", "\x1b[38;2;255;255;255m") // Ubuntu orange (#e95420), crisp white
-    } else if d.contains("debian") {
-        ("\x1b[38;2;215;10;83m", "\x1b[38;2;255;255;255m") // Debian red (#d70a53), crisp white
-    } else if d.contains("bazzite") {
-        ("\x1b[38;2;138;79;255m", "\x1b[38;2;41;168;224m") // Bazzite purple outer (#8a4fff), Fedora blue inner (#29a8e0)
-    } else if d.contains("fedora") || d.contains("nobara") {
-        ("\x1b[38;2;41;168;224m", "\x1b[38;2;255;255;255m") // Fedora blue (#29a8e0), crisp pure white inner (#ffffff)
-    } else if d.contains("nixos") {
-        ("\x1b[38;2;82;119;195m", "\x1b[38;2;126;186;228m") // NixOS blue (#5277c3), cyan inner (#7ebae4)
-    } else if d.contains("void") {
-        ("\x1b[38;2;71;128;99m", "\x1b[38;2;104;166;132m") // Void green (#478063)
-    } else if d.contains("alpine") {
-        ("\x1b[38;2;41;168;224m", "\x1b[38;2;255;255;255m") // Alpine blue, crisp white
-    } else if d.contains("opensuse") || d.contains("suse") {
-        ("\x1b[38;2;115;186;37m", "\x1b[38;2;255;255;255m") // openSUSE green (#73ba25), white
-    } else if d.contains("mint") {
-        ("\x1b[38;2;135;189;101m", "\x1b[38;2;255;255;255m") // Linux Mint green (#87bd65), white
-    } else if d.contains("manjaro") {
-        ("\x1b[38;2;53;191;92m", "\x1b[38;2;255;255;255m") // Manjaro green (#35bf5c), white
-    } else if d.contains("macos") || d.contains("darwin") || d.contains("pop") {
-        ("\x1b[38;2;51;162;230m", "\x1b[38;2;255;255;255m") // Apple/Pop cyan (#33a2e6), white
-    } else if d.contains("cachyos") || d.contains("cachy") {
-        ("\x1b[38;2;0;180;216m", "\x1b[38;2;0;204;153m") // CachyOS cyan outer (#00b4d8), green inner (#00cc99)
-    } else if d.contains("freebsd") || d.contains("bsd") {
-        ("\x1b[38;2;218;31;40m", "\x1b[38;2;255;255;255m") // FreeBSD red (#da1f28), white
-    } else if d.contains("bengal") || d == "cat" || d == "kedi" {
-        ("\x1b[38;2;249;175;79m", "\x1b[38;2;102;217;160m") // Bengal amber gold outer (#f9af4f), emerald inner (#66d9a0)
-    } else if d.contains("van") || d.contains("angora") {
-        ("\x1b[38;2;81;190;240m", "\x1b[38;2;255;255;255m") // Turkish Van sky blue outer, pure white inner
-    } else {
-        ("\x1b[38;2;254;122;230m", "\x1b[38;2;255;255;255m") // Default Tux: vivid pink outer, pure white inner
+    let key = normalize_distro_key(distro);
+    match key.as_str() {
+        "gentoo" | "gentoo linux" => ("\x1b[38;2;254;122;230m", "\x1b[38;2;255;255;255m"),
+        "arch" | "arch linux" | "archlinux" | "arch linux arm" => {
+            ("\x1b[38;2;23;147;209m", "\x1b[38;2;51;162;230m")
+        }
+        "ubuntu" | "ubuntu linux" | "asahi" | "asahi linux" => {
+            ("\x1b[38;2;233;84;32m", "\x1b[38;2;255;255;255m")
+        }
+        "debian" | "debian gnu linux" | "debian gnu/linux" => {
+            ("\x1b[38;2;215;10;83m", "\x1b[38;2;255;255;255m")
+        }
+        "bazzite" | "bazzite linux" => ("\x1b[38;2;138;79;255m", "\x1b[38;2;41;168;224m"),
+        "fedora" | "fedora linux" | "nobara" | "nobara linux" => {
+            ("\x1b[38;2;41;168;224m", "\x1b[38;2;255;255;255m")
+        }
+        "nixos" | "nixos linux" => ("\x1b[38;2;82;119;195m", "\x1b[38;2;126;186;228m"),
+        "void" | "void linux" => ("\x1b[38;2;71;128;99m", "\x1b[38;2;104;166;132m"),
+        "alpine" | "alpine linux" => ("\x1b[38;2;41;168;224m", "\x1b[38;2;255;255;255m"),
+        "opensuse"
+        | "opensuse tumbleweed"
+        | "opensuse leap"
+        | "opensuse microos"
+        | "suse"
+        | "sles" => ("\x1b[38;2;115;186;37m", "\x1b[38;2;255;255;255m"),
+        "mint" | "linux mint" => ("\x1b[38;2;135;189;101m", "\x1b[38;2;255;255;255m"),
+        "manjaro" | "manjaro linux" => ("\x1b[38;2;53;191;92m", "\x1b[38;2;255;255;255m"),
+        "macos" | "mac os" | "darwin" | "pop" | "pop os" | "pop! os" | "pop!_os" => {
+            ("\x1b[38;2;51;162;230m", "\x1b[38;2;255;255;255m")
+        }
+        "cachyos" | "cachy os" | "cachy" => ("\x1b[38;2;0;180;216m", "\x1b[38;2;0;204;153m"),
+        "freebsd" | "free bsd" | "openbsd" | "open bsd" | "netbsd" | "net bsd"
+        | "dragonfly bsd" | "bsd" => ("\x1b[38;2;218;31;40m", "\x1b[38;2;255;255;255m"),
+        "bengal" | "bengal cat" | "cat" | "kedi" => {
+            ("\x1b[38;2;249;175;79m", "\x1b[38;2;102;217;160m")
+        }
+        "van" | "turkish van" | "angora" | "turkish angora" => {
+            ("\x1b[38;2;81;190;240m", "\x1b[38;2;255;255;255m")
+        }
+        _ => ("\x1b[38;2;254;122;230m", "\x1b[38;2;255;255;255m"),
     }
 }
 
@@ -540,22 +632,28 @@ pub fn parse_color_to_ansi(color_str: &str) -> String {
     if let Some((r, g, b)) = crate::color::parse_color(s) {
         format!("\x1b[38;2;{r};{g};{b}m")
     } else {
-        s.to_string()
+        "\x1b[38;2;255;255;255m".to_string()
     }
+}
+
+#[derive(Clone, Copy)]
+struct CellSample<'a> {
+    mask: usize,
+    braille: u8,
+    n: usize,
+    lsum: f32,
+    color: Option<&'a str>,
+    outer: bool,
 }
 
 impl Renderer3D {
     pub fn new(shading_mode: ShadingMode, custom_shading: Option<&str>) -> Self {
-        let shading_chars = if let Some(chars) = custom_shading {
-            chars.chars().map(|c| c.to_string()).collect()
-        } else {
-            match shading_mode {
-                ShadingMode::Ascii => RAMP_ASCII.chars().map(|c| c.to_string()).collect(),
-                ShadingMode::Blocks | ShadingMode::Sextants => {
-                    RAMP_BLOCKS.chars().map(|c| c.to_string()).collect()
-                }
-            }
-        };
+        let mut shading_chars: Vec<String> = custom_shading
+            .map(|chars| chars.chars().map(|c| c.to_string()).collect())
+            .unwrap_or_default();
+        if shading_chars.is_empty() {
+            shading_chars = default_ramp(shading_mode);
+        }
         Self {
             shading_mode,
             shading_chars,
@@ -569,7 +667,7 @@ impl Renderer3D {
             "front" | "center" => (0.0, 0.0, -1.0),
             "top" => (0.0, 0.8944, -0.4472),
             "bottom" => (0.0, -0.8944, -0.4472),
-            _ => (0.4082, 0.8165, -0.4082), // "top-left" default
+            _ => (0.4082, 0.8165, -0.4082),
         };
         let vx = 0.0f32;
         let vy = 0.0f32;
@@ -598,15 +696,15 @@ impl Renderer3D {
         let (sub_rows, sub_cols) = self.shading_mode.sub_grid();
         let total_sub_cols = canvas_cols * sub_cols;
         let total_sub_rows = canvas_rows * sub_rows;
-
         let total_cells = total_sub_rows * total_sub_cols;
 
-        // Flat 1D buffers: z-buffer (ooz), luminance, color index / slice, outer flag
         let mut zbuf = vec![0.0f32; total_cells];
         let mut lumbuf = vec![0.0f32; total_cells];
         let mut colorbuf: Vec<Option<&str>> = vec![None; total_cells];
         let mut is_outer_buf = vec![false; total_cells];
 
+        let angle_x = sanitize_finite(angle_x, 0.0);
+        let angle_y = sanitize_finite(angle_y, 0.0);
         let cos_a = angle_x.cos();
         let sin_a = angle_x.sin();
         let cos_b = angle_y.cos();
@@ -615,14 +713,14 @@ impl Renderer3D {
         let (lx, ly, lz) = self.light_dir;
         let (hx, hy, hz) = self.half_dir;
 
+        let size_scale = sanitize_size_scale(self.size_scale);
         let k2 = 5.5f32;
-        let logo_h = (canvas_cols * 3 / 5).max(canvas_rows.min(canvas_cols * 3 / 5));
-        let k1 = 37.0f32 * (logo_h as f32 / 36.0f32) * self.size_scale;
+        let logo_h = canvas_cols * 3 / 5;
+        let k1 = 37.0f32 * (logo_h as f32 / 36.0f32) * size_scale;
         let k1x2 = k1 * 2.0;
 
         let half_w = canvas_cols as f32 * 0.5;
 
-        // Compute face-on y extent to align the top of the 3D logo at row 1
         let mut face_up = 0.0f32;
         for pt in &model.points {
             let zc = pt.z + k2;
@@ -641,16 +739,13 @@ impl Renderer3D {
         };
 
         for pt in &model.points {
-            // Rotation around X axis
             let y1 = pt.y * cos_a - pt.z * sin_a;
             let z1 = pt.y * sin_a + pt.z * cos_a;
 
-            // Rotation around Y axis
             let x2 = pt.x * cos_b + z1 * sin_b;
             let z2 = -pt.x * sin_b + z1 * cos_b;
             let y2 = y1;
 
-            // Rotate normals
             let ny1 = pt.ny * cos_a - pt.nz * sin_a;
             let nz1 = pt.ny * sin_a + pt.nz * cos_a;
             let nx2 = pt.nx * cos_b + nz1 * sin_b;
@@ -675,14 +770,12 @@ impl Renderer3D {
             let idx = uy * total_sub_cols + ux;
 
             if ooz > zbuf[idx] {
-                // Blinn-Phong Diffuse
                 let diff = (nx2 * lx + ny2 * ly + nz2 * lz).max(0.0);
 
-                // Specular
                 let spec_dot = (nx2 * hx + ny2 * hy + nz2 * hz).max(0.0);
-                let mut spec = spec_dot * spec_dot; // ^2
-                spec *= spec; // ^4
-                spec *= spec; // ^8
+                let mut spec = spec_dot * spec_dot;
+                spec *= spec;
+                spec *= spec;
 
                 let l = (0.08 + 0.62 * diff + 0.30 * spec).min(1.0);
 
@@ -693,19 +786,13 @@ impl Renderer3D {
             }
         }
 
-        let smax = self.shading_chars.len().saturating_sub(1);
-        let total_sub = sub_rows * sub_cols;
-        let mut output_lines = Vec::with_capacity(canvas_rows);
-
+        let mut cells: Vec<CellSample<'_>> = Vec::with_capacity(canvas_cols * canvas_rows);
         for row in 0..canvas_rows {
-            let mut line = String::with_capacity(canvas_cols * 16);
-            let mut prev_color: Option<&str> = None;
-
+            let y0 = row * sub_rows;
             for col in 0..canvas_cols {
                 let x0 = col * sub_cols;
-                let y0 = row * sub_rows;
-
                 let mut mask = 0usize;
+                let mut braille = 0u8;
                 let mut bit = 0;
                 let mut n = 0;
                 let mut lsum = 0.0f32;
@@ -720,6 +807,9 @@ impl Renderer3D {
                         let z = zbuf[idx];
                         if z > 0.0 {
                             mask |= 1 << bit;
+                            if self.shading_mode == ShadingMode::Braille {
+                                braille |= braille_bit(sr, sc);
+                            }
                             lsum += lumbuf[idx];
                             n += 1;
                             if z > best_z {
@@ -732,7 +822,43 @@ impl Renderer3D {
                     }
                 }
 
-                if n == 0 {
+                cells.push(CellSample {
+                    mask,
+                    braille,
+                    n,
+                    lsum,
+                    color: cell_color,
+                    outer: cell_is_outer,
+                });
+            }
+        }
+
+        let mut occupied = vec![false; cells.len()];
+        for (index, cell) in cells.iter().enumerate() {
+            occupied[index] = cell.n > 0;
+        }
+
+        let fallback_chars: Vec<String>;
+        let shading_chars: &[String] = if self.shading_chars.is_empty() {
+            fallback_chars = default_ramp(self.shading_mode);
+            &fallback_chars
+        } else {
+            &self.shading_chars
+        };
+        let smax = shading_chars.len().saturating_sub(1);
+        let total_sub = sub_rows * sub_cols;
+        let full_mask = (1usize << total_sub) - 1;
+
+        let mut output_lines = Vec::with_capacity(canvas_rows);
+
+        for row in 0..canvas_rows {
+            let mut line = String::with_capacity(canvas_cols * 16);
+            let mut prev_color: Option<&str> = None;
+
+            for col in 0..canvas_cols {
+                let cell = &cells[row * canvas_cols + col];
+
+                if cell.n == 0 {
                     if prev_color.is_some() {
                         line.push_str("\x1b[0m");
                         prev_color = None;
@@ -741,36 +867,46 @@ impl Renderer3D {
                     continue;
                 }
 
-                let coverage = n as f32 / total_sub as f32;
-                let ink = (lsum / n as f32) * coverage;
+                let coverage = cell.n as f32 / total_sub as f32;
+                let ink = (cell.lsum / cell.n as f32) * coverage;
                 let ci = ((ink * smax as f32) + 0.5) as usize;
                 let ci = ci.min(smax);
 
-                // Select glyph
-                let glyph = if mask != ((1 << total_sub) - 1)
-                    && (coverage - ink).abs()
-                        <= (((ci + 1) as f32 / self.shading_chars.len() as f32) - ink).abs()
-                {
-                    match self.shading_mode {
-                        ShadingMode::Ascii => &self.shading_chars[ci],
-                        ShadingMode::Blocks => QUADRANT_GLYPHS[mask],
-                        ShadingMode::Sextants => {
-                            if mask < self.sextant_table.len() {
-                                &self.sextant_table[mask]
-                            } else {
-                                &self.shading_chars[ci]
-                            }
+                let mut buf = [0u8; 4];
+                let glyph: &str = match self.shading_mode {
+                    ShadingMode::Ascii => &shading_chars[ci],
+                    ShadingMode::Dot => DOT_RAMP[ci.min(DOT_RAMP.len() - 1)],
+                    ShadingMode::Solid => "█",
+                    ShadingMode::Blocks => {
+                        if cell.mask == full_mask {
+                            &shading_chars[ci]
+                        } else {
+                            QUADRANT_GLYPHS[cell.mask.min(QUADRANT_GLYPHS.len() - 1)]
                         }
                     }
-                } else {
-                    &self.shading_chars[ci]
+                    ShadingMode::Sextants => {
+                        if cell.mask == full_mask || cell.mask >= self.sextant_table.len() {
+                            &shading_chars[ci]
+                        } else {
+                            &self.sextant_table[cell.mask]
+                        }
+                    }
+                    ShadingMode::Braille => char_str(braille_char(cell.braille), &mut buf),
+                    ShadingMode::Wireframe => {
+                        let up = row > 0 && occupied[(row - 1) * canvas_cols + col];
+                        let down = row + 1 < canvas_rows && occupied[(row + 1) * canvas_cols + col];
+                        let left = col > 0 && occupied[row * canvas_cols + col - 1];
+                        let right = col + 1 < canvas_cols && occupied[row * canvas_cols + col + 1];
+                        match wire_glyph(up, down, left, right) {
+                            Some(ch) => char_str(ch, &mut buf),
+                            None => " ",
+                        }
+                    }
                 };
 
-                // Color handling: extruded side walls always take outer_color (matching areofyl/fetch);
-                // front/back surfaces take cell_color (e.g. white 'f' in Fedora) or inner_color (white/cyan).
-                let active_color = if cell_is_outer {
+                let active_color = if cell.outer {
                     self.outer_color.as_str()
-                } else if let Some(col) = cell_color {
+                } else if let Some(col) = cell.color {
                     col
                 } else {
                     self.inner_color.as_str()
@@ -798,6 +934,15 @@ impl Renderer3D {
 mod tests {
     use super::*;
 
+    fn small_model(mode: ShadingMode) -> Model3D {
+        let ascii = vec![
+            "  ###  ".to_string(),
+            " ####### ".to_string(),
+            "  #####  ".to_string(),
+        ];
+        Model3D::from_ascii_lines(&ascii, 1.0, 1.0, mode)
+    }
+
     #[test]
     fn test_char_weight_utf8() {
         assert_eq!(char_weight_utf8(' '), 0.0);
@@ -808,12 +953,7 @@ mod tests {
 
     #[test]
     fn test_model3d_creation() {
-        let ascii = vec![
-            "  ###  ".to_string(),
-            " ####### ".to_string(),
-            "  #####  ".to_string(),
-        ];
-        let model = Model3D::from_ascii_lines(&ascii, 1.0, 1.0, ShadingMode::Ascii);
+        let model = small_model(ShadingMode::Ascii);
         assert!(!model.points.is_empty());
         assert_eq!(model.orig_rows, 3);
     }
@@ -830,5 +970,152 @@ mod tests {
         let frame = renderer.render_frame(&model, 0.2, 0.4, 20, 10);
         assert_eq!(frame.len(), 10);
         assert!(frame.iter().any(|line| !line.trim().is_empty()));
+    }
+
+    #[test]
+    fn shading_mode_parses_all_locked_names() {
+        assert_eq!(ShadingMode::from_str_loose("ascii"), ShadingMode::Ascii);
+        assert_eq!(ShadingMode::from_str_loose("blocks"), ShadingMode::Blocks);
+        assert_eq!(
+            ShadingMode::from_str_loose("sextants"),
+            ShadingMode::Sextants
+        );
+        assert_eq!(ShadingMode::from_str_loose("braille"), ShadingMode::Braille);
+        assert_eq!(ShadingMode::from_str_loose("dot"), ShadingMode::Dot);
+        assert_eq!(
+            ShadingMode::from_str_loose("wireframe"),
+            ShadingMode::Wireframe
+        );
+        assert_eq!(ShadingMode::from_str_loose("wire"), ShadingMode::Wireframe);
+        assert_eq!(ShadingMode::from_str_loose("solid"), ShadingMode::Solid);
+        assert_eq!(ShadingMode::from_str_loose("nonsense"), ShadingMode::Ascii);
+    }
+
+    #[test]
+    fn sub_grids_match_documented_shapes() {
+        assert_eq!(ShadingMode::Ascii.sub_grid(), (1, 1));
+        assert_eq!(ShadingMode::Blocks.sub_grid(), (2, 2));
+        assert_eq!(ShadingMode::Sextants.sub_grid(), (3, 2));
+        assert_eq!(ShadingMode::Braille.sub_grid(), (4, 2));
+    }
+
+    #[test]
+    fn braille_bits_cover_both_columns() {
+        assert_eq!(braille_bit(0, 0), 0x01);
+        assert_eq!(braille_bit(1, 0), 0x02);
+        assert_eq!(braille_bit(2, 0), 0x04);
+        assert_eq!(braille_bit(3, 0), 0x40);
+        assert_eq!(braille_bit(0, 1), 0x08);
+        assert_eq!(braille_bit(1, 1), 0x10);
+        assert_eq!(braille_bit(2, 1), 0x20);
+        assert_eq!(braille_bit(3, 1), 0x80);
+        assert_eq!(braille_char(0) as u32, 0x2800);
+        assert_eq!(braille_char(0xFF) as u32, 0x28FF);
+    }
+
+    #[test]
+    fn wire_glyph_draws_outlines() {
+        assert_eq!(wire_glyph(true, true, true, true), Some('┼'));
+        assert_eq!(wire_glyph(true, true, false, false), Some('│'));
+        assert_eq!(wire_glyph(false, false, true, true), Some('─'));
+        assert_eq!(wire_glyph(false, false, false, false), None);
+    }
+
+    #[test]
+    fn empty_custom_shading_chars_never_panic() {
+        let model = small_model(ShadingMode::Ascii);
+        let renderer = Renderer3D::new(ShadingMode::Ascii, Some(""));
+        assert!(!renderer.shading_chars.is_empty());
+        let frame = renderer.render_frame(&model, 0.1, 0.2, 12, 6);
+        assert_eq!(frame.len(), 6);
+        assert!(frame.iter().any(|line| !line.trim().is_empty()));
+    }
+
+    #[test]
+    fn every_shading_mode_renders_output() {
+        for mode in [
+            ShadingMode::Ascii,
+            ShadingMode::Blocks,
+            ShadingMode::Sextants,
+            ShadingMode::Braille,
+            ShadingMode::Dot,
+            ShadingMode::Wireframe,
+            ShadingMode::Solid,
+        ] {
+            let model = small_model(mode);
+            let renderer = Renderer3D::new(mode, None);
+            let frame = renderer.render_frame(&model, 0.0, 0.0, 16, 8);
+            assert_eq!(frame.len(), 8, "mode {mode:?}");
+            assert!(
+                frame.iter().any(|line| !line.trim().is_empty()),
+                "mode {mode:?} produced no visible output"
+            );
+        }
+    }
+
+    #[test]
+    fn braille_mode_emits_braille_codepoints() {
+        let model = small_model(ShadingMode::Braille);
+        let renderer = Renderer3D::new(ShadingMode::Braille, None);
+        let frame = renderer.render_frame(&model, 0.0, 0.0, 24, 10);
+        let braille_count = frame
+            .iter()
+            .flat_map(|line| line.chars())
+            .filter(|ch| ('\u{2800}'..='\u{28ff}').contains(ch))
+            .count();
+        assert!(braille_count > 0, "expected braille glyphs in output");
+    }
+
+    #[test]
+    fn extreme_size_and_depth_are_sanitized() {
+        let ascii = vec![
+            "  ###  ".to_string(),
+            " #   # ".to_string(),
+            "  ###  ".to_string(),
+        ];
+        for scale in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 1e30, 100.0] {
+            let model = Model3D::from_ascii_lines(&ascii, scale, scale, ShadingMode::Ascii);
+            assert!(
+                model.points.len() < 250_000,
+                "mesh must stay bounded for scale {scale}"
+            );
+            assert!(
+                model
+                    .points
+                    .iter()
+                    .all(|p| p.x.is_finite() && p.y.is_finite()),
+                "coordinates must be finite for scale {scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_helpers_have_defaults() {
+        assert_eq!(sanitize_size_scale(f32::NAN), 1.0);
+        assert_eq!(sanitize_size_scale(f32::INFINITY), 1.0);
+        assert_eq!(sanitize_size_scale(100.0), 3.0);
+        assert_eq!(sanitize_size_scale(0.0), 0.1);
+        assert_eq!(sanitize_depth_scale(f32::NAN), 1.0);
+        assert_eq!(sanitize_depth_scale(f32::INFINITY), 1.0);
+        assert_eq!(sanitize_speed(f32::NAN), 1.0);
+        assert_eq!(sanitize_speed(f32::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn distro_colors_use_exact_matching() {
+        let van = ("\x1b[38;2;81;190;240m", "\x1b[38;2;255;255;255m");
+        let default = ("\x1b[38;2;254;122;230m", "\x1b[38;2;255;255;255m");
+        assert_eq!(distro_3d_colors("van"), van);
+        assert_eq!(distro_3d_colors("Van"), van);
+        assert_eq!(distro_3d_colors("Vanilla OS"), default);
+        assert_eq!(distro_3d_colors("Arch Linux"), distro_3d_colors("arch"));
+        assert_ne!(distro_3d_colors("Arch Linux"), distro_3d_colors("Ubuntu"));
+    }
+
+    #[test]
+    fn invalid_color_falls_back_to_white() {
+        assert_eq!(parse_color_to_ansi("not-a-color"), "\x1b[38;2;255;255;255m");
+        assert_eq!(parse_color_to_ansi("#ff0000"), "\x1b[38;2;255;0;0m");
+        assert_eq!(parse_color_to_ansi("\x1b[31m"), "\x1b[31m");
     }
 }

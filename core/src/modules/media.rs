@@ -1,5 +1,5 @@
+use crate::proc::{run_with_timeout, OPTIONAL_SOURCE_TIMEOUT};
 use crate::{Info, Module};
-use std::process::Command;
 
 pub struct Media;
 
@@ -27,19 +27,16 @@ pub fn parse_playerctl_output(stdout: &str) -> Option<String> {
 }
 
 fn get_mpris_media() -> Option<Info> {
-    if let Ok(output) = Command::new("playerctl")
-        .args(["metadata", "--format", "{{artist}} - {{title}}"])
-        .output()
-    {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            if let Some(val) = parse_playerctl_output(&text) {
-                return Some(Info::new("Media", val));
-            }
-        }
+    let output = run_with_timeout(
+        "playerctl",
+        &["metadata", "--format", "{{artist}} - {{title}}"],
+        OPTIONAL_SOURCE_TIMEOUT,
+    )?;
+    if !output.success() {
+        return None;
     }
-
-    None
+    let text = output.stdout_string();
+    parse_playerctl_output(&text).map(|val| Info::new("Media", val))
 }
 
 #[cfg(test)]

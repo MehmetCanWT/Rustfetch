@@ -7,21 +7,48 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.1.2)'
+        description: 'Release tag (e.g. v0.1.4)'
         required: false
         default: ''
 
+# Default to read-only; jobs that need more request it explicitly below.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  # Gate: never build or publish a release whose test suite is red.
+  test:
+    name: Test Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Test Suite
+        run: cargo test --workspace --locked
+
   build-tarballs:
     name: Build - ${{ matrix.platform_name }}
+    needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required by actions/attest-build-provenance.
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -53,32 +80,45 @@ jobs:
 
       - name: Install Cross
         if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        # Pinned: a floating cross release must not silently change the build.
+        run: cargo install cross --version 0.2.5
 
       - name: Resolve Version
         id: meta
+        env:
+          # Untrusted event value routed through env (never interpolated into run).
+          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CARGO_VER="$(grep -E '^version[[:space:]]*=' Cargo.toml | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
           if [[ "$RAW_TAG" == v* ]]; then
             VER="${RAW_TAG#v}"
+            if [[ "$VER" != "$CARGO_VER" ]]; then
+              echo "::error::Tag version (${VER}) does not match Cargo.toml workspace version (${CARGO_VER})"
+              exit 1
+            fi
           else
-            VER="$(grep -E '^version\s*=' Cargo.toml | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
+            VER="$CARGO_VER"
           fi
-          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${VER}"
+            echo "tag=v${VER}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build Release Binaries
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.rust_target }} -p rustfetch
+            cross build --release --locked --target "${{ matrix.rust_target }}" -p rustfetch
           else
-            cargo build --release --target ${{ matrix.rust_target }} -p rustfetch
+            cargo build --release --locked --target "${{ matrix.rust_target }}" -p rustfetch
           fi
 
       - name: Package Clean Archive & Native Distro Packages
+        env:
+          VER: ${{ steps.meta.outputs.version }}
+          PLATFORM: ${{ matrix.platform_name }}
+          TARGET_TRIPLE: ${{ matrix.rust_target }}
         run: |
-          VER="${{ steps.meta.outputs.version }}"
-          PLATFORM="${{ matrix.platform_name }}"
-          TARGET_DIR="target/${{ matrix.rust_target }}/release"
+          TARGET_DIR="target/${TARGET_TRIPLE}/release"
 
           mkdir -p dist
           STAGE="stage/rustfetch-v${VER}-${PLATFORM}"
@@ -94,31 +134,42 @@ jobs:
             "$STAGE/rustfetch" --completions zsh > "$STAGE/completions/_rustfetch"
             "$STAGE/rustfetch" --completions fish > "$STAGE/completions/rustfetch.fish"
           else
-            cargo run -q --bin rustfetch -- --completions bash > "$STAGE/completions/rustfetch.bash"
-            cargo run -q --bin rustfetch -- --completions zsh > "$STAGE/completions/_rustfetch"
-            cargo run -q --bin rustfetch -- --completions fish > "$STAGE/completions/rustfetch.fish"
+            # Cross-compiled targets (aarch64) cannot run on the x86_64 runner.
+            cargo run -q --locked --bin rustfetch -- --completions bash > "$STAGE/completions/rustfetch.bash"
+            cargo run -q --locked --bin rustfetch -- --completions zsh > "$STAGE/completions/_rustfetch"
+            cargo run -q --locked --bin rustfetch -- --completions fish > "$STAGE/completions/rustfetch.fish"
           fi
           test -s "$STAGE/completions/rustfetch.bash"
           test -s "$STAGE/completions/_rustfetch"
           test -s "$STAGE/completions/rustfetch.fish"
 
+          # Deterministic tarballs: stable file order, timestamps and ownership.
+          TAR_FLAGS=(--sort=name --mtime='UTC 2020-01-01' --owner=0 --group=0 --numeric-owner)
+
           # 1. Clean platform tarball (no 'unknown' in filename)
           ARCHIVE="rustfetch-v${VER}-${PLATFORM}.tar.gz"
-          tar -C stage -czf "dist/${ARCHIVE}" "rustfetch-v${VER}-${PLATFORM}"
+          tar -C stage "${TAR_FLAGS[@]}" -czf "dist/${ARCHIVE}" "rustfetch-v${VER}-${PLATFORM}"
           cp "dist/${ARCHIVE}" "dist/rustfetch-${PLATFORM}.tar.gz"
 
           # 2. Build NixOS bundle from static musl x86_64 target
           if [ "$PLATFORM" = "linux-musl-x86_64" ]; then
             NIX_STAGE="stage/rustfetch-v${VER}-nixos-x86_64"
             cp -r "$STAGE" "$NIX_STAGE"
-            [ -f flake.nix ] && cp flake.nix "$NIX_STAGE/"
-            tar -C stage -czf "dist/rustfetch-v${VER}-nixos-x86_64.tar.gz" "rustfetch-v${VER}-nixos-x86_64"
+            if [ -f flake.nix ]; then
+              cp flake.nix "$NIX_STAGE/"
+            fi
+            tar -C stage "${TAR_FLAGS[@]}" -czf "dist/rustfetch-v${VER}-nixos-x86_64.tar.gz" "rustfetch-v${VER}-nixos-x86_64"
           fi
 
           # 3. Build native Arch (.pkg.tar.zst), Fedora (.rpm), and Debian (.deb) packages on x86_64 gnu
           if [ "$PLATFORM" = "linux-gnu-x86_64" ]; then
             bash scripts/build-packages.sh "$VER" "$STAGE" dist
           fi
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/*'
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -130,6 +181,9 @@ jobs:
     name: Publish GitHub Release & Changelog
     needs: build-tarballs
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -143,28 +197,37 @@ jobs:
 
       - name: Generate Release Notes (with Cat Breed Codename) & Checksums
         id: notes
+        env:
+          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CARGO_VER="$(grep -E '^version[[:space:]]*=' Cargo.toml | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
           if [[ "$RAW_TAG" == v* ]]; then
             VER="${RAW_TAG#v}"
             TAG="$RAW_TAG"
           else
-            VER="$(grep -E '^version\s*=' Cargo.toml | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
+            VER="$CARGO_VER"
             TAG="v${VER}"
+          fi
+          if [[ "$TAG" != "v${CARGO_VER}" ]]; then
+            echo "::error::Tag ${TAG} does not match Cargo.toml workspace version v${CARGO_VER}"
+            exit 1
           fi
 
           CODENAME="$(bash scripts/release-notes.sh --codename "$VER")"
           TITLE="$(bash scripts/release-notes.sh --title "$VER")"
           bash scripts/release-notes.sh "$VER" > RELEASE_NOTES.md
 
-          cd release-Input
-          sha256sum * > SHA256SUMS.txt
-          cd ..
+          (
+            cd release-Input
+            sha256sum -- * > SHA256SUMS.txt
+          )
 
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VER}" >> "$GITHUB_OUTPUT"
-          echo "codename=${CODENAME}" >> "$GITHUB_OUTPUT"
-          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=${TAG}"
+            echo "version=${VER}"
+            echo "codename=${CODENAME}"
+            echo "title=${TITLE}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

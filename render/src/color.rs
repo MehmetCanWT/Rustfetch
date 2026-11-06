@@ -1,9 +1,17 @@
 use fast_image_resize as fr;
-use image::ImageReader;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
-fn load_and_sample_image(path: &str) -> Option<HashMap<(u8, u8, u8), u32>> {
-    let img_reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+use crate::image::open_image_reader;
+
+/// Aggregated colour statistics for one sampled image.
+struct ColorSample {
+    counts: HashMap<(u8, u8, u8), u32>,
+    avg_lum: u8,
+}
+
+fn load_and_sample_image(path: &str) -> Option<ColorSample> {
+    let img_reader = open_image_reader(path)?;
     let img = img_reader.decode().ok()?;
     let rgba_img = img.to_rgba8();
 
@@ -13,35 +21,33 @@ fn load_and_sample_image(path: &str) -> Option<HashMap<(u8, u8, u8), u32>> {
         return None;
     }
 
-    let composited_raw: Vec<u8> = rgba_img
-        .pixels()
-        .flat_map(|pixel| {
-            let a = pixel[3] as f32 / 255.0;
-            [
-                (pixel[0] as f32 * a + 20.0 * (1.0 - a)).round() as u8,
-                (pixel[1] as f32 * a + 20.0 * (1.0 - a)).round() as u8,
-                (pixel[2] as f32 * a + 20.0 * (1.0 - a)).round() as u8,
-                255,
-            ]
-        })
-        .collect();
+    // Composite alpha in place: no second full-resolution buffer is allocated.
+    let mut raw = rgba_img.into_raw();
+    for chunk in raw.as_chunks_mut::<4>().0 {
+        let a = chunk[3] as u32;
+        if a < 255 {
+            let inv = 255 - a;
+            chunk[0] = ((chunk[0] as u32 * a + 20 * inv + 127) / 255) as u8;
+            chunk[1] = ((chunk[1] as u32 * a + 20 * inv + 127) / 255) as u8;
+            chunk[2] = ((chunk[2] as u32 * a + 20 * inv + 127) / 255) as u8;
+        }
+        chunk[3] = 255;
+    }
 
-    let buffer = crate::image::resize_rgba(
-        composited_raw,
-        orig_w,
-        orig_h,
-        60,
-        60,
-        fr::FilterType::Bilinear,
-    )?;
-    let mut color_counts: HashMap<(u8, u8, u8), u32> = HashMap::new();
+    let buffer = crate::image::resize_rgba(raw, orig_w, orig_h, 60, 60, fr::FilterType::Bilinear)?;
+    let mut counts: HashMap<(u8, u8, u8), u32> = HashMap::new();
+    let mut lum_sum: u64 = 0;
+    let mut pixel_count: u64 = 0;
     for &[r, g, b, _] in buffer.as_chunks::<4>().0 {
         let qr = (r / 4) * 4;
         let qg = (g / 4) * 4;
         let qb = (b / 4) * 4;
-        *color_counts.entry((qr, qg, qb)).or_insert(0) += 1;
+        *counts.entry((qr, qg, qb)).or_insert(0) += 1;
+        lum_sum += (r as u64 * 299 + g as u64 * 587 + b as u64 * 114) / 1000;
+        pixel_count += 1;
     }
-    Some(color_counts)
+    let avg_lum = lum_sum.checked_div(pixel_count).unwrap_or(128).min(255) as u8;
+    Some(ColorSample { counts, avg_lum })
 }
 
 fn ensure_visible(c: (u8, u8, u8)) -> (u8, u8, u8) {
@@ -69,9 +75,9 @@ fn rgb_sv_lum(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
     (s, max, lum)
 }
 
-fn dominant_from_counts(color_counts: &HashMap<(u8, u8, u8), u32>) -> String {
+fn dominant_from_counts(sample: &ColorSample) -> String {
     let mut candidates: Vec<(f64, (u8, u8, u8))> = Vec::new();
-    for (&(r, g, b), &count) in color_counts {
+    for (&(r, g, b), &count) in &sample.counts {
         let (s, v, lum) = rgb_sv_lum(r, g, b);
         if s > 0.25 && v > 0.35 && v < 0.98 {
             let score = (count as f64).powf(0.6)
@@ -95,19 +101,41 @@ fn dominant_from_counts(color_counts: &HashMap<(u8, u8, u8), u32>) -> String {
         return format!("#{:02x}{:02x}{:02x}", r, g, b);
     }
 
-    "#5485b6".to_string()
+    // No saturated candidate: derive a neutral grey from the image luminance
+    // instead of returning an unrelated hard-coded blue.
+    let v = sample.avg_lum.clamp(32, 224);
+    format!("#{v:02x}{v:02x}{v:02x}")
 }
 
-fn palette_from_counts(
-    color_counts: &HashMap<(u8, u8, u8), u32>,
-    count: usize,
-) -> Option<Vec<(u8, u8, u8)>> {
-    if color_counts.is_empty() {
-        return None;
+/// Even grey ramp used when an image has no saturated colours at all.
+fn monochrome_palette(count: usize, avg_lum: u8) -> Vec<(u8, u8, u8)> {
+    let count = count.max(1);
+    let base = avg_lum as i32;
+    let spread = 70i32;
+    let mut palette = Vec::with_capacity(count);
+    for index in 0..count {
+        let t = if count == 1 {
+            0.5
+        } else {
+            index as f64 / (count - 1) as f64
+        };
+        let offset = ((spread * 2) as f64 * t).round() as i32;
+        let value = (base - spread + offset).clamp(24, 235) as u8;
+        palette.push((value, value, value));
+    }
+    palette
+}
+
+fn palette_from_counts(sample: &ColorSample, count: usize) -> Option<Vec<(u8, u8, u8)>> {
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    if sample.counts.is_empty() {
+        return Some(monochrome_palette(count, sample.avg_lum));
     }
 
     let mut scored_colors: Vec<(f64, (u8, u8, u8))> = Vec::new();
-    for (&(r, g, b), &cnt) in color_counts {
+    for (&(r, g, b), &cnt) in &sample.counts {
         let (s, v, lum) = rgb_sv_lum(r, g, b);
         if v > 0.12 && lum < 0.96 {
             let score = (cnt as f64).powf(0.5) * (1.0 + s * 1.5) * (1.0 - (lum - 0.55).abs() * 0.5);
@@ -117,8 +145,14 @@ fn palette_from_counts(
 
     scored_colors.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    if scored_colors.is_empty() {
-        return None;
+    // Achromatic images (grey/white/black) get an even grey ramp instead of a
+    // handful of lightened duplicates of the same grey.
+    let has_saturation = scored_colors.iter().any(|(_, (r, g, b))| {
+        let (saturation, _, _) = rgb_sv_lum(*r, *g, *b);
+        saturation > 0.08
+    });
+    if scored_colors.is_empty() || !has_saturation {
+        return Some(monochrome_palette(count, sample.avg_lum));
     }
 
     let mut palette: Vec<(u8, u8, u8)> = Vec::with_capacity(count);
@@ -173,13 +207,13 @@ fn palette_from_counts(
 }
 
 pub fn extract_dominant_color(path: &str) -> Option<String> {
-    let color_counts = load_and_sample_image(path)?;
-    Some(dominant_from_counts(&color_counts))
+    let sample = load_and_sample_image(path)?;
+    Some(dominant_from_counts(&sample))
 }
 
 pub fn extract_color_palette(path: &str, count: usize) -> Option<Vec<(u8, u8, u8)>> {
-    let color_counts = load_and_sample_image(path)?;
-    palette_from_counts(&color_counts, count)
+    let sample = load_and_sample_image(path)?;
+    palette_from_counts(&sample, count)
 }
 
 pub type RgbPalette = Vec<(u8, u8, u8)>;
@@ -188,10 +222,10 @@ pub fn extract_dominant_and_palette(
     path: &str,
     count: usize,
 ) -> Option<(String, Option<RgbPalette>)> {
-    let color_counts = load_and_sample_image(path)?;
+    let sample = load_and_sample_image(path)?;
     Some((
-        dominant_from_counts(&color_counts),
-        palette_from_counts(&color_counts, count),
+        dominant_from_counts(&sample),
+        palette_from_counts(&sample, count),
     ))
 }
 
@@ -204,6 +238,31 @@ pub struct Theme {
     pub background: (u8, u8, u8),
     pub border: (u8, u8, u8),
     pub text: (u8, u8, u8),
+}
+
+/// Canonical theme identifiers understood by [`get_theme`], in display order.
+///
+/// This is the single source of truth for `--list-themes`, the interactive
+/// setup wizard and the documentation consistency tests.
+pub const THEME_NAMES: &[&str] = &[
+    "catppuccin",
+    "catppuccin-latte",
+    "catppuccin-macchiato",
+    "catppuccin-frappe",
+    "dracula",
+    "tokyo-night",
+    "gruvbox",
+    "nord",
+    "rose-pine",
+    "cyberpunk",
+    "monokai",
+    "onedark",
+    "solarized",
+];
+
+/// Returns the canonical theme identifier list.
+pub fn theme_names() -> &'static [&'static str] {
+    THEME_NAMES
 }
 
 pub fn get_theme(name: &str) -> Option<Theme> {
@@ -392,11 +451,11 @@ pub fn apply_gradient_to_text(text: &str, colors: &[(u8, u8, u8)]) -> String {
         let (r, g, b) = colors[0];
         return format!("\x1b[38;2;{r};{g};{b}m{text}\x1b[0m");
     }
-    let mut out = String::with_capacity(text.len() * 16);
+    let mut out = String::with_capacity(text.len() * 20);
     for (i, &ch) in chars.iter().enumerate() {
         let t = i as f32 / (n - 1) as f32;
         let (r, g, b) = interpolate_gradient(colors, t);
-        out.push_str(&format!("\x1b[38;2;{r};{g};{b}m{ch}"));
+        let _ = write!(out, "\x1b[38;2;{r};{g};{b}m{ch}");
     }
     out.push_str("\x1b[0m");
     out
@@ -413,10 +472,53 @@ mod tests {
 
     #[test]
     fn test_extract_dominant_color_real_image() {
-        if let Some(color) = extract_dominant_color("../scratch/test2.jpg") {
-            assert!(color.starts_with('#'));
-            assert_eq!(color.len(), 7);
+        let image = format!("{}/../images/arch.png", env!("CARGO_MANIFEST_DIR"));
+        let color = extract_dominant_color(&image).expect("repository image must yield a colour");
+        assert!(color.starts_with('#'));
+        assert_eq!(color.len(), 7);
+    }
+
+    fn write_mono_png(name: &str, rgb: [u8; 3]) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "rustfetch_color_test_{}_{}.png",
+            name,
+            std::process::id()
+        ));
+        let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+        img.save(&path).expect("write colour test png");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn test_monochrome_dominant_color_is_gray() {
+        let path = write_mono_png("uniform_dark", [30, 30, 30]);
+        let color = extract_dominant_color(&path).expect("must extract");
+        let _ = std::fs::remove_file(&path);
+        let rgb = parse_color(&color).expect("valid hex colour");
+        assert_eq!(
+            rgb.0, rgb.1,
+            "grey dominant colour must have equal channels"
+        );
+        assert_eq!(rgb.1, rgb.2);
+        assert_ne!(color, "#5485b6", "hard-coded blue fallback was removed");
+    }
+
+    #[test]
+    fn test_monochrome_palette_is_gray_ramp() {
+        let path = write_mono_png("uniform_gray", [96, 96, 96]);
+        let palette = extract_color_palette(&path, 8).expect("must yield palette");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(palette.len(), 8);
+        for (r, g, b) in &palette {
+            assert_eq!(r, g);
+            assert_eq!(g, b);
         }
+    }
+
+    #[test]
+    fn test_zero_palette_count_returns_empty() {
+        let image = format!("{}/../images/arch.png", env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(extract_color_palette(&image, 0), Some(Vec::new()));
     }
 
     #[test]

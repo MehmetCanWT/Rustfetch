@@ -3,11 +3,12 @@ mod json_export;
 mod layout;
 mod logos;
 mod shell_hook;
+mod text;
 mod tools;
 
 pub use image_picker::{
-    filter_candidate_images, get_image_color_and_palette, pick_random_image, tilde_expand,
-    update_recent_history,
+    default_logo_dir, fastfetch_logo_dir, filter_candidate_images, get_image_color_and_palette,
+    pick_random_image, tilde_expand, update_recent_history,
 };
 pub use json_export::extract_percentage;
 pub use shell_hook::{
@@ -17,12 +18,14 @@ pub use shell_hook::{
 
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Shell};
-use rustfetch_core::config::Config;
+use rustfetch_core::config::{Config, ModuleConfig};
 use rustfetch_core::modules::{all_modules, module_by_name, module_from_config};
 use rustfetch_core::{default_icon_for_module, detect_all, Module};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use layout::{color_code, InfoLine, LogoBlock};
+use text::{write_stdout, write_stdout_line};
 
 fn cli_version_string() -> &'static str {
     static VERSION_STR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -31,6 +34,131 @@ fn cli_version_string() -> &'static str {
         let code = rustfetch_core::codename_for_version(ver);
         format!("{ver} \"{code}\"")
     })
+}
+
+/// Parses a 1..=512 terminal dimension for --width/--height style flags.
+fn parse_dimension(value: &str) -> Result<usize, String> {
+    let n: usize = value
+        .trim()
+        .parse()
+        .map_err(|_| format!("'{value}' is not a whole number"))?;
+    if !(1..=512).contains(&n) {
+        return Err("must be between 1 and 512".to_string());
+    }
+    Ok(n)
+}
+
+/// Parses a signed border-image offset in the range -10000..=10000.
+fn parse_offset(value: &str) -> Result<i32, String> {
+    let n: i32 = value
+        .trim()
+        .parse()
+        .map_err(|_| format!("'{value}' is not a whole number"))?;
+    if !(-10000..=10000).contains(&n) {
+        return Err("must be between -10000 and 10000".to_string());
+    }
+    Ok(n)
+}
+
+fn parse_bounded_f32(value: &str, min: f32, max: f32) -> Result<f32, String> {
+    let n: f32 = value
+        .trim()
+        .parse()
+        .map_err(|_| format!("'{value}' is not a number"))?;
+    if !n.is_finite() {
+        return Err("must be a finite number".to_string());
+    }
+    if n < min || n > max {
+        return Err(format!("must be between {min} and {max}"));
+    }
+    Ok(n)
+}
+
+/// Parses the 3D rotation-speed multiplier (0.05..=10.0, finite).
+fn parse_speed(value: &str) -> Result<f32, String> {
+    parse_bounded_f32(value, 0.05, 10.0)
+}
+
+/// Parses the 3D model scale (0.1..=3.0, finite).
+fn parse_size(value: &str) -> Result<f32, String> {
+    parse_bounded_f32(value, 0.1, 3.0)
+}
+
+/// Parses the 3D extrusion depth (0.1..=5.0, finite).
+fn parse_depth(value: &str) -> Result<f32, String> {
+    parse_bounded_f32(value, 0.1, 5.0)
+}
+
+/// Parses the animation/3D frame rate (1..=120, finite).
+fn parse_fps(value: &str) -> Result<f64, String> {
+    let n: f64 = value
+        .trim()
+        .parse()
+        .map_err(|_| format!("'{value}' is not a number"))?;
+    if !n.is_finite() {
+        return Err("must be a finite number".to_string());
+    }
+    if !(1.0..=120.0).contains(&n) {
+        return Err("must be between 1 and 120".to_string());
+    }
+    Ok(n)
+}
+
+/// Canonical 3D shading modes accepted on the command line.
+pub const SHADING_MODES: &[&str] = &[
+    "ascii",
+    "blocks",
+    "sextants",
+    "braille",
+    "dot",
+    "wireframe",
+    "solid",
+];
+
+/// Validates and normalises a --shading-mode value; unknown values are rejected.
+fn parse_shading_mode(value: &str) -> Result<String, String> {
+    let normalised = value.trim().to_ascii_lowercase();
+    if normalised.is_empty() {
+        return Err("shading mode must not be empty".to_string());
+    }
+    if SHADING_MODES.contains(&normalised.as_str()) {
+        Ok(normalised)
+    } else {
+        Err(format!(
+            "unknown shading mode '{value}' (expected one of: {})",
+            SHADING_MODES.join(", ")
+        ))
+    }
+}
+
+/// Validates a custom 3D shading character set: non-empty, no control characters.
+fn parse_shading_chars(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("shading character set must not be empty".to_string());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("shading character set must not contain control characters".to_string());
+    }
+    if trimmed.chars().count() > 64 {
+        return Err("shading character set must contain at most 64 characters".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Picks the effective custom shading ramp; empty or whitespace-only values
+/// (from the CLI or the config file) are rejected so the renderer falls back
+/// to its built-in ramp instead of indexing an empty character set.
+fn resolve_shading_chars(cli_value: Option<&str>, config_value: Option<&str>) -> Option<String> {
+    cli_value
+        .map(str::trim)
+        .filter(|chars| !chars.is_empty())
+        .or_else(|| {
+            config_value
+                .map(str::trim)
+                .filter(|chars| !chars.is_empty())
+        })
+        .map(str::to_string)
 }
 
 #[derive(Parser, Debug)]
@@ -43,34 +171,49 @@ struct Cli {
     #[arg(long, hide = true)]
     check_updates_bg: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Print the built-in default configuration template")]
     print_default_config: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Print the active (resolved) configuration as TOML")]
     dump_config: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Write a default configuration file and exit")]
     generate_config: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Import an existing Fastfetch configuration")]
     import_fastfetch: bool,
 
-    #[arg(short = 'c', long, value_name = "PATH")]
+    #[arg(
+        short = 'c',
+        long,
+        value_name = "PATH",
+        help = "Path to a custom TOML configuration file"
+    )]
     config: Option<String>,
 
-    #[arg(short = 'l', long, value_name = "DISTRO")]
+    #[arg(
+        short = 'l',
+        long,
+        value_name = "DISTRO",
+        help = "Override the ASCII logo (e.g. arch, ubuntu, cat)"
+    )]
     logo: Option<String>,
 
-    #[arg(short = 'i', long, value_name = "PATH")]
+    #[arg(
+        short = 'i',
+        long,
+        value_name = "PATH",
+        help = "Render an image logo (kitty/sixel/iTerm/halfblock)"
+    )]
     image: Option<String>,
 
-    #[arg(long, value_name = "COLOR")]
+    #[arg(long, value_name = "COLOR", help = "Override the theme/accent color")]
     color: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Center the output horizontally")]
     center: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Disable the logo and show only information rows")]
     no_logo: bool,
 
     #[arg(
@@ -80,52 +223,91 @@ struct Cli {
     )]
     clear: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Run the continuous live monitor (requires a TTY)")]
     live: bool,
 
-    #[arg(long = "3d")]
+    #[arg(
+        long = "3d",
+        help = "Run the real-time 3D animated logo (requires a TTY)"
+    )]
     three_d: bool,
 
-    #[arg(long, value_name = "FLOAT")]
+    #[arg(
+        long,
+        value_name = "FLOAT",
+        value_parser = parse_speed,
+        help = "3D rotation speed multiplier (0.05-10.0)"
+    )]
     speed: Option<f32>,
 
-    #[arg(long)]
+    #[arg(long, help = "Rotate the 3D model around the X axis")]
     rotate_x: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Rotate the 3D model around the Y axis")]
     rotate_y: bool,
 
-    #[arg(long, value_name = "FLOAT")]
+    #[arg(
+        long,
+        value_name = "FLOAT",
+        value_parser = parse_size,
+        help = "3D model scale (0.1-3.0)"
+    )]
     size: Option<f32>,
 
-    #[arg(long, value_name = "FLOAT")]
+    #[arg(
+        long,
+        value_name = "FLOAT",
+        value_parser = parse_depth,
+        help = "3D extrusion depth (0.1-5.0)"
+    )]
     depth: Option<f32>,
 
-    #[arg(long, value_name = "MODE")]
+    #[arg(
+        long,
+        value_name = "MODE",
+        value_parser = parse_shading_mode,
+        help = "3D shading mode: ascii, blocks, sextants, braille, dot, wireframe, solid"
+    )]
     shading_mode: Option<String>,
 
-    #[arg(long, value_name = "CHARS")]
+    #[arg(
+        long,
+        value_name = "CHARS",
+        value_parser = parse_shading_chars,
+        help = "Custom 3D shading character ramp (non-empty)"
+    )]
     shading: Option<String>,
 
-    #[arg(long, value_name = "COLS", alias = "image-width-cols")]
+    #[arg(
+        long,
+        value_name = "COLS",
+        alias = "image-width-cols",
+        value_parser = parse_dimension,
+        help = "Logo image width in columns (1-512)"
+    )]
     width: Option<usize>,
 
-    #[arg(long, value_name = "ROWS")]
+    #[arg(
+        long,
+        value_name = "ROWS",
+        value_parser = parse_dimension,
+        help = "Logo image height in rows (1-512)"
+    )]
     height: Option<usize>,
 
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", help = "Stop after N animation frames")]
     frames: Option<usize>,
 
-    #[arg(long)]
+    #[arg(long, help = "Loop animation frames indefinitely")]
     infinite: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Keep animating and ignore key presses until quit")]
     hold: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Exit the animation on the first key press")]
     exit_on_key: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Output structured JSON telemetry to stdout")]
     json: bool,
 
     #[arg(
@@ -134,91 +316,180 @@ struct Cli {
     )]
     waybar: bool,
 
-    #[arg(long, value_name = "FORMAT", help = "Output format (e.g. waybar)")]
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        help = "Output format shortcut (json or waybar)"
+    )]
     format: Option<String>,
 
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help = "Use a custom static ASCII art file")]
     ascii: Option<String>,
 
-    #[arg(long, alias = "anim", value_name = "PATH")]
+    #[arg(
+        long,
+        alias = "anim",
+        value_name = "PATH",
+        help = "Play a multi-frame ASCII animation file or directory"
+    )]
     ascii_anim: Option<String>,
 
-    #[arg(long, value_name = "FLOAT")]
+    #[arg(
+        long,
+        value_name = "FLOAT",
+        value_parser = parse_fps,
+        help = "Animation frame rate in frames per second (1-120)"
+    )]
     fps: Option<f64>,
 
-    #[arg(long, value_name = "PRESET")]
+    #[arg(
+        long,
+        value_name = "PRESET",
+        help = "Apply a built-in layout preset (default, minimal, card, ...)"
+    )]
     preset: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Profile per-module detection latency")]
     benchmark: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Draw a decorative border box around the output")]
     border: bool,
 
-    #[arg(long, value_name = "STYLE")]
+    #[arg(
+        long,
+        value_name = "STYLE",
+        help = "Border style (rounded, ascii, ...)"
+    )]
     border_style: Option<String>,
 
-    #[arg(long, value_name = "COLOR")]
+    #[arg(long, value_name = "COLOR", help = "Border color (name or hex)")]
     border_color: Option<String>,
 
-    #[arg(long, value_name = "TITLE")]
+    #[arg(long, value_name = "TITLE", help = "Title embedded in the top border")]
     border_title: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Show icons only, hiding module labels")]
     icon_only: bool,
 
-    #[arg(long, value_name = "SEP")]
+    #[arg(long, value_name = "SEP", help = "Separator between label and value")]
     separator: Option<String>,
 
-    #[arg(long, value_name = "THEME")]
+    #[arg(long, value_name = "THEME", help = "Apply a built-in color theme")]
     theme: Option<String>,
 
-    #[arg(long, value_name = "PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Render an image as a decorative border/frame"
+    )]
     border_image: Option<String>,
 
-    #[arg(long, value_name = "COLS")]
+    #[arg(
+        long,
+        value_name = "COLS",
+        value_parser = parse_dimension,
+        help = "Border image width in columns (1-512)"
+    )]
     border_image_width: Option<usize>,
 
-    #[arg(long, value_name = "ROWS")]
+    #[arg(
+        long,
+        value_name = "ROWS",
+        value_parser = parse_dimension,
+        help = "Border image height in rows (1-512)"
+    )]
     border_image_height: Option<usize>,
 
-    #[arg(long, value_name = "COLS")]
+    #[arg(
+        long,
+        value_name = "COLS",
+        value_parser = parse_offset,
+        allow_hyphen_values = true,
+        help = "Border image horizontal offset (-10000 to 10000)"
+    )]
     border_image_offset_x: Option<i32>,
 
-    #[arg(long, value_name = "ROWS")]
+    #[arg(
+        long,
+        value_name = "ROWS",
+        value_parser = parse_offset,
+        allow_hyphen_values = true,
+        help = "Border image vertical offset (-10000 to 10000)"
+    )]
     border_image_offset_y: Option<i32>,
 
-    #[arg(long, value_name = "INDEX")]
+    #[arg(
+        long,
+        value_name = "INDEX",
+        help = "Border image stacking z-index (config only)"
+    )]
     border_image_z_index: Option<i32>,
 
-    #[arg(long, value_name = "POSITION")]
+    #[arg(
+        long,
+        value_name = "POSITION",
+        help = "Border image position (left, right, top, bottom, frame)"
+    )]
     border_image_position: Option<String>,
 
-    #[arg(long, value_name = "PROTOCOL")]
+    #[arg(
+        long,
+        value_name = "PROTOCOL",
+        help = "Border image graphics protocol (auto, kitty, sixel, iterm)"
+    )]
     border_image_protocol: Option<String>,
 
-    #[arg(long, value_name = "BOOL")]
+    #[arg(
+        long,
+        value_name = "BOOL",
+        help = "Preserve border image aspect ratio (true/false)"
+    )]
     border_image_preserve_aspect_ratio: Option<bool>,
 
-    #[arg(long, value_name = "BOOL")]
+    #[arg(
+        long,
+        value_name = "BOOL",
+        help = "Draw text on top of the border image (true/false)"
+    )]
     border_image_text_on_top: Option<bool>,
 
-    #[arg(long, value_name = "POSITION")]
+    #[arg(
+        long,
+        value_name = "POSITION",
+        help = "Logo position (left, right, top, bottom, behind, none)"
+    )]
     logo_position: Option<String>,
 
-    #[arg(long, value_name = "PROTOCOL")]
+    #[arg(
+        long,
+        value_name = "PROTOCOL",
+        help = "Logo graphics protocol (auto, kitty, sixel, iterm, braille, halfblock)"
+    )]
     protocol: Option<String>,
 
-    #[arg(long, value_enum, value_name = "SHELL")]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SHELL",
+        help = "Generate shell completion script and exit"
+    )]
     completions: Option<Shell>,
 
-    #[arg(long, value_name = "SHELL")]
+    #[arg(
+        long,
+        value_name = "SHELL",
+        help = "Print shell startup integration script and exit"
+    )]
     init: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Install the shell startup hook into your shell rc file")]
     install_hook: bool,
 
-    #[arg(long, alias = "remove-hook")]
+    #[arg(
+        long,
+        alias = "remove-hook",
+        help = "Remove the RustFetch shell startup hook"
+    )]
     uninstall_hook: bool,
 
     #[arg(
@@ -239,7 +510,7 @@ struct Cli {
     #[arg(long, help = "List all built-in OS and cat breed mascot logos")]
     list_logos: bool,
 
-    #[arg(long, help = "Clear cached module data (~/.cache/rustfetch)")]
+    #[arg(long, help = "Clear cached module data and exit")]
     clean_cache: bool,
 
     #[arg(long, help = "Run system, terminal graphics, and config diagnostics")]
@@ -286,161 +557,122 @@ fn resolve_distro_logo(distro_name: &str, padding: usize) -> logos::Logo {
     logo
 }
 
-pub fn run() {
+fn output_failure() -> ! {
+    eprintln!("rustfetch: failed to write output to stdout");
+    std::process::exit(1);
+}
+
+fn out(text: &str) {
+    if !write_stdout(text) {
+        output_failure();
+    }
+}
+
+fn out_line(text: &str) {
+    if !write_stdout_line(text) {
+        output_failure();
+    }
+}
+
+fn stdout_is_tty() -> bool {
+    std::io::stdout().is_terminal()
+}
+
+#[cfg(unix)]
+static TERMINATE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn handle_terminate(_: libc::c_int) {
+    TERMINATE_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// Installs SIGINT/SIGTERM/SIGHUP handlers that only set an atomic flag.
+///
+/// Every interactive loop polls [`terminate_requested`] and breaks so that the
+/// terminal guards (raw mode / alternate screen / cursor) run their `Drop`.
+fn install_termination_handlers() {
     #[cfg(unix)]
     unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        let handler = handle_terminate as *const () as libc::sighandler_t;
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            libc::signal(signal, handler);
+        }
     }
-    let cli = Cli::parse();
+}
 
-    if cli.check_updates_bg {
-        rustfetch_core::modules::update::refresh_update_cache();
-        return;
+fn terminate_requested() -> bool {
+    #[cfg(unix)]
+    {
+        TERMINATE_REQUESTED.load(Ordering::SeqCst)
     }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
 
-    if let Some(shell) = &cli.init {
-        match shell_init_script(shell) {
-            Some(script) => print!("{script}"),
-            None => {
-                eprintln!("Unknown shell: {shell}. Supported shells: bash, zsh, fish");
-                std::process::exit(1);
+fn reset_termination_flag() {
+    #[cfg(unix)]
+    TERMINATE_REQUESTED.store(false, Ordering::SeqCst);
+}
+
+/// Best-effort terminal restore for panics in interactive modes.
+fn install_terminal_panic_hook() {
+    use std::sync::Once;
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = crossterm::terminal::disable_raw_mode();
+            {
+                use crossterm::cursor::Show;
+                use crossterm::terminal::LeaveAlternateScreen;
+                let mut stdout = std::io::stdout();
+                let _ = crossterm::execute!(stdout, Show, LeaveAlternateScreen);
             }
-        }
-        return;
-    }
+            let _ = write_stdout("\x1b[0m\x1b[?7h");
+            previous(info);
+        }));
+    });
+}
 
-    if cli.install_hook {
-        install_shell_hook();
-        return;
-    }
-
-    if cli.uninstall_hook {
-        uninstall_shell_hook();
-        return;
-    }
-
-    if cli.print_default_config || cli.dump_config {
-        print!("{}", Config::to_default_toml());
-        return;
-    }
-
-    if cli.generate_config {
-        let path = Config::config_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Some(bak) = Config::backup_if_exists(&path) {
-            println!("Backed up existing configuration to {}", bak.display());
-        }
-        let default_toml = Config::to_default_toml();
-        match std::fs::write(&path, &default_toml) {
-            Ok(()) => println!("Configuration generated at {}", path.display()),
-            Err(e) => eprintln!("Failed to write configuration: {e}"),
-        }
-        return;
-    }
-
-    if cli.import_fastfetch {
-        let path = Config::config_path();
-        if let Some(ff_path) = Config::find_fastfetch_config() {
-            match std::fs::read_to_string(&ff_path) {
-                Ok(content) => match Config::import_from_fastfetch(&content) {
-                    Some(imported) => match imported.to_toml_string() {
-                        Ok(toml_str) => {
-                            if let Some(parent) = path.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            if let Some(bak) = Config::backup_if_exists(&path) {
-                                println!("Backed up existing configuration to {}", bak.display());
-                            }
-                            match std::fs::write(&path, &toml_str) {
-                                Ok(()) => println!(
-                                    "Successfully imported Fastfetch config to {}",
-                                    path.display()
-                                ),
-                                Err(e) => eprintln!("Failed to save imported config: {e}"),
-                            }
-                        }
-                        Err(e) => eprintln!("Failed to serialize imported config: {e}"),
-                    },
-                    None => eprintln!(
-                        "Could not parse Fastfetch config from {}",
-                        ff_path.display()
-                    ),
-                },
-                Err(e) => eprintln!(
-                    "Could not read Fastfetch config from {}: {e}",
-                    ff_path.display()
-                ),
-            }
-        } else {
-            eprintln!("No Fastfetch configuration file found to import.");
-        }
-        return;
-    }
-
-    if let Some(shell) = cli.completions {
-        let mut cmd = Cli::command();
-        generate(shell, &mut cmd, "rustfetch", &mut std::io::stdout());
-        return;
-    }
-
-    if cli.list_modules {
-        tools::run_list_modules();
-        return;
-    }
-
-    if cli.list_themes {
-        tools::run_list_themes();
-        return;
-    }
-
-    if cli.list_presets {
-        tools::run_list_presets();
-        return;
-    }
-
-    if cli.list_logos {
-        tools::run_list_logos();
-        return;
-    }
-
-    if cli.clean_cache {
-        tools::run_clean_cache();
-        return;
-    }
-
-    if cli.doctor {
-        tools::run_doctor();
-        return;
-    }
-
-    if cli.self_update {
-        tools::run_self_update();
-        return;
-    }
-
-    if cli.setup {
-        tools::run_setup_tui();
-        return;
-    }
-
+/// Resolves the active configuration (--preset > --config > XDG default) and
+/// applies every CLI override before any command runs.
+fn resolve_config(
+    cli: &Cli,
+    allow_missing_path: bool,
+) -> Result<(Config, std::path::PathBuf), String> {
+    let path = cli
+        .config
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(Config::config_path);
     let mut config = if let Some(preset_name) = &cli.preset {
-        Config::from_preset(preset_name).unwrap_or_else(|| {
-            eprintln!(
+        Config::from_preset(preset_name).ok_or_else(|| {
+            format!(
                 "Unknown preset: {preset_name}. Available presets: default, minimal, clean, dots, card, brackets, neofetch, retro, modern, compact"
-            );
-            std::process::exit(1);
-        })
-    } else if let Some(path) = &cli.config {
-        Config::load_from(std::path::Path::new(path)).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        })
+            )
+        })?
+    } else if allow_missing_path {
+        if path.exists() {
+            Config::load_from(&path).unwrap_or_default()
+        } else {
+            Config::default()
+        }
+    } else if cli.config.is_some() || path.exists() {
+        Config::load_from(&path)?
     } else {
         Config::load()
     };
+    apply_cli_overrides(&mut config, cli);
+    if cli.no_update_check {
+        config.general.check_updates = false;
+    }
+    Ok((config, path))
+}
 
+/// Applies every command-line override on top of the loaded configuration.
+fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     if let Some(logo) = &cli.logo {
         config.general.logo.distro = logo.clone();
         config.general.logo.image_path = None;
@@ -449,6 +681,7 @@ pub fn run() {
     if let Some(img) = &cli.image {
         config.general.logo.image_path = Some(img.clone());
         config.general.logo.random_image = false;
+        config.general.logo.enabled = true;
     }
     if cli.center {
         config.general.center = true;
@@ -520,28 +753,22 @@ pub fn run() {
             }
         }
     }
+}
 
-    let (mut modules, mut configs): (
-        Vec<Box<dyn Module>>,
-        Vec<rustfetch_core::config::ModuleConfig>,
-    ) = if config.modules.is_empty() {
-        let all = all_modules();
-        let cfgs = all
-            .iter()
-            .map(|m| rustfetch_core::config::ModuleConfig::new(m.name()))
-            .collect();
-        (all, cfgs)
-    } else {
-        config
-            .modules
-            .iter()
-            .filter_map(|mc| module_from_config(mc).map(|m| (m, mc.clone())))
-            .unzip()
-    };
-
-    if cli.no_update_check {
-        config.general.check_updates = false;
-    }
+/// Builds the module list, then applies the update-module filtering rules.
+fn build_modules(config: &Config) -> (Vec<Box<dyn Module>>, Vec<ModuleConfig>) {
+    let (mut modules, mut configs): (Vec<Box<dyn Module>>, Vec<ModuleConfig>) =
+        if config.modules.is_empty() {
+            let all = all_modules();
+            let cfgs = all.iter().map(|m| ModuleConfig::new(m.name())).collect();
+            (all, cfgs)
+        } else {
+            config
+                .modules
+                .iter()
+                .filter_map(|mc| module_from_config(mc).map(|m| (m, mc.clone())))
+                .unzip()
+        };
 
     if !config.general.check_updates {
         let mut filtered_mods = Vec::with_capacity(modules.len());
@@ -557,32 +784,267 @@ pub fn run() {
     } else if !configs.iter().any(|mc| mc.name == "update") {
         if let Some(m) = module_by_name("update") {
             modules.push(m);
-            configs.push(rustfetch_core::config::ModuleConfig::new("update"));
+            configs.push(ModuleConfig::new("update"));
         }
     }
+    (modules, configs)
+}
 
-    use std::io::IsTerminal;
+/// Writes the generated configuration file, honouring --config/--preset.
+fn generate_config_file(cli: &Cli, config: &Config, path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create configuration directory {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+    if let Some(bak) = Config::backup_if_exists(path) {
+        out_line(&format!(
+            "Backed up existing configuration to {}",
+            bak.display()
+        ));
+    }
+    let content = if cli.preset.is_some() {
+        config
+            .to_toml_string()
+            .map_err(|e| format!("Failed to serialize preset configuration: {e}"))?
+    } else {
+        Config::to_default_toml()
+    };
+    std::fs::write(path, &content).map_err(|e| format!("Failed to write configuration: {e}"))?;
+    out_line(&format!("Configuration generated at {}", path.display()));
+    Ok(())
+}
 
-    let is_interactive = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
+/// Imports a Fastfetch configuration, honouring --config as the output path.
+fn import_fastfetch_config(path: &std::path::Path) -> Result<(), String> {
+    let ff_path = Config::find_fastfetch_config()
+        .ok_or_else(|| "No Fastfetch configuration file found to import.".to_string())?;
+    let content = std::fs::read_to_string(&ff_path).map_err(|e| {
+        format!(
+            "Could not read Fastfetch config from {}: {e}",
+            ff_path.display()
+        )
+    })?;
+    let imported = Config::import_from_fastfetch(&content).ok_or_else(|| {
+        format!(
+            "Could not parse Fastfetch config from {}",
+            ff_path.display()
+        )
+    })?;
+    let toml_str = imported
+        .to_toml_string()
+        .map_err(|e| format!("Failed to serialize imported config: {e}"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create configuration directory {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+    if let Some(bak) = Config::backup_if_exists(path) {
+        out_line(&format!(
+            "Backed up existing configuration to {}",
+            bak.display()
+        ));
+    }
+    std::fs::write(path, &toml_str).map_err(|e| format!("Failed to save imported config: {e}"))?;
+    out_line(&format!(
+        "Successfully imported Fastfetch config to {}",
+        path.display()
+    ));
+    Ok(())
+}
+
+/// Builds one warning line per requested output mode that is shadowed by a
+/// higher-precedence mode (benchmark > waybar > json > 3d > ascii-anim > live).
+fn mode_conflict_warnings(requested_modes: &[(&str, bool)]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(selected) = requested_modes.iter().position(|(_, requested)| *requested) {
+        for (index, (name, requested)) in requested_modes.iter().enumerate() {
+            if *requested && index != selected {
+                warnings.push(format!(
+                    "warning: {name} is ignored because {} takes precedence",
+                    requested_modes[selected].0
+                ));
+            }
+        }
+    }
+    warnings
+}
+
+pub fn run() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+    install_termination_handlers();
+    let cli = Cli::parse();
+
+    if cli.check_updates_bg {
+        rustfetch_core::modules::update::refresh_update_cache();
+        return;
+    }
+
+    if let Some(shell) = &cli.init {
+        match shell_init_script(shell) {
+            Some(script) => out(script),
+            None => {
+                eprintln!("Unknown shell: {shell}. Supported shells: bash, zsh, fish");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if cli.install_hook {
+        install_shell_hook();
+        return;
+    }
+
+    if cli.uninstall_hook {
+        uninstall_shell_hook();
+        return;
+    }
+
+    if let Some(shell) = cli.completions {
+        let mut cmd = Cli::command();
+        let mut buffer: Vec<u8> = Vec::new();
+        generate(shell, &mut cmd, "rustfetch", &mut buffer);
+        out(&String::from_utf8_lossy(&buffer));
+        return;
+    }
+
+    if cli.print_default_config {
+        out(&Config::to_default_toml());
+        return;
+    }
+
+    let commands_need_config = !(cli.generate_config || cli.import_fastfetch);
+    let (config, config_path) = match resolve_config(&cli, !commands_need_config) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+
+    if cli.dump_config {
+        match config.to_toml_string() {
+            Ok(toml) => out(&toml),
+            Err(error) => {
+                eprintln!("Failed to serialize active configuration: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if cli.generate_config {
+        if let Err(error) = generate_config_file(&cli, &config, &config_path) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if cli.import_fastfetch {
+        if let Err(error) = import_fastfetch_config(&config_path) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if cli.list_modules {
+        tools::run_list_modules();
+        return;
+    }
+
+    if cli.list_themes {
+        tools::run_list_themes();
+        return;
+    }
+
+    if cli.list_presets {
+        tools::run_list_presets();
+        return;
+    }
+
+    if cli.list_logos {
+        tools::run_list_logos();
+        return;
+    }
+
+    if cli.clean_cache {
+        tools::run_clean_cache();
+        return;
+    }
+
+    if cli.doctor {
+        tools::run_doctor(&config, &config_path, config.general.check_updates);
+        return;
+    }
+
+    if cli.self_update {
+        tools::run_self_update();
+        return;
+    }
+
+    if cli.setup {
+        if let Err(error) = tools::run_setup_tui(&config, &config_path) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    let is_interactive = stdout_is_tty() && std::io::stdin().is_terminal();
     let is_dumb = std::env::var("TERM")
         .map(|t| t == "dumb" || t.is_empty())
         .unwrap_or(false);
+    let tty_ready = is_interactive && !is_dumb;
 
-    // CRITICAL SYSTEM SAFETY GUARD:
-    // Animated 3D mode and Live monitor mode MUST NEVER run in non-interactive,
-    // piped, redirected, or headless environments (e.g. SDDM/GDM session startup scripts,
-    // systemd services, cron jobs, pipes, or background subshells).
-    // Running interactive raw-mode animation loops in non-TTY environments hangs
-    // display managers and session scripts indefinitely!
+    // Animated 3D / live monitor / animations must never run without a TTY:
+    // raw-mode loops would hang display managers, cron jobs and pipes.
     let is_3d_requested = cli.three_d
         || config.general.logo.three_d.enabled
         || config.general.three_d.unwrap_or(false);
-
     let is_anim_requested = cli.ascii_anim.is_some() || config.general.logo.animation.enabled;
+    let is_live_requested = cli.live || config.general.live;
 
-    let is_3d = is_3d_requested && is_interactive && !is_dumb && !cli.keep_logo;
-    let is_anim = is_anim_requested && is_interactive && !is_dumb && !cli.keep_logo;
-    let is_live = (cli.live || config.general.live) && is_interactive && !is_dumb && !cli.keep_logo;
+    let mut is_3d = is_3d_requested && tty_ready && !cli.keep_logo;
+    let is_anim = is_anim_requested && tty_ready && !cli.keep_logo;
+    let is_live = is_live_requested && tty_ready && !cli.keep_logo;
+
+    if is_3d && (cli.image.is_some() || cli.no_logo) {
+        if cli.no_logo {
+            eprintln!(
+                "warning: --3d is disabled because --no-logo was given; showing static output"
+            );
+        } else {
+            eprintln!(
+                "warning: --3d is disabled because --image was given; rendering the static image"
+            );
+        }
+        is_3d = false;
+    }
+
+    if !is_3d && !tty_ready && cli.three_d {
+        eprintln!("warning: --3d requires an interactive TTY; falling back to static output");
+    }
+    if !is_live && !tty_ready && cli.live {
+        eprintln!("warning: --live requires an interactive TTY; falling back to static output");
+    }
+    if !is_anim && !tty_ready && cli.ascii_anim.is_some() {
+        eprintln!(
+            "warning: --ascii-anim requires an interactive TTY; falling back to static output"
+        );
+    }
+
     let is_waybar = cli.waybar
         || cli
             .format
@@ -596,20 +1058,43 @@ pub fn run() {
             .map(|f| f.eq_ignore_ascii_case("json"))
             .unwrap_or(false);
 
-    if cli.benchmark {
-        run_benchmark(&modules);
+    let requested_modes: [(&str, bool); 6] = [
+        ("--benchmark", cli.benchmark),
+        ("--waybar", is_waybar),
+        ("--json", is_json),
+        ("--3d", is_3d),
+        ("--ascii-anim", is_anim),
+        ("--live", is_live),
+    ];
+    for warning in mode_conflict_warnings(&requested_modes) {
+        eprintln!("{warning}");
+    }
+
+    if tty_ready && (is_3d || is_anim || is_live) {
+        install_terminal_panic_hook();
+    }
+
+    let (modules, configs) = build_modules(&config);
+
+    let result = if cli.benchmark {
+        run_benchmark(&modules)
     } else if is_waybar {
-        run_waybar(&config, &modules, &configs);
+        run_waybar(&config, &modules, &configs)
     } else if is_json {
-        run_json(&config, &modules, &configs);
+        run_json(&config, &modules, &configs)
     } else if is_3d {
-        run_3d(&config, &cli, &modules, &configs);
+        run_3d(&config, &cli, &modules, &configs)
     } else if is_anim {
-        run_ascii_animation(&config, &cli, &modules, &configs);
+        run_ascii_animation(&config, &cli, &modules, &configs)
     } else if is_live {
-        run_live(&config, &cli, &modules, &configs);
+        run_live(&config, &cli, &modules, &configs)
     } else {
-        run_once(&config, &cli, &modules, &configs);
+        run_once(&config, &cli, &modules, &configs)
+    };
+
+    if let Err(error) = result {
+        eprintln!("error: {error}");
+        std::process::exit(1);
     }
 }
 
@@ -619,11 +1104,11 @@ struct LineWrapGuard {
 
 impl LineWrapGuard {
     fn new() -> Self {
-        use std::io::IsTerminal;
-        let active = std::io::stdout().is_terminal() && layout::colors_enabled();
+        // Disabling line wrapping only makes sense on a real terminal; escape
+        // sequences must never leak into pipes or files.
+        let active = stdout_is_tty();
         if active {
-            print!("\x1b[?7l");
-            let _ = std::io::stdout().flush();
+            let _ = write_stdout("\x1b[?7l");
         }
         Self { active }
     }
@@ -632,19 +1117,21 @@ impl LineWrapGuard {
 impl Drop for LineWrapGuard {
     fn drop(&mut self) {
         if self.active {
-            print!("\x1b[?7h");
-            let _ = std::io::stdout().flush();
+            let _ = write_stdout("\x1b[?7h");
         }
     }
 }
+
+const OUTPUT_ERROR: &str = "failed to write output to stdout";
 
 fn run_once(
     config: &Config,
     cli: &Cli,
     modules: &[Box<dyn Module>],
     configs: &[rustfetch_core::config::ModuleConfig],
-) {
+) -> Result<(), String> {
     let max_attempts = if cli.keep_logo { 4 } else { 1 };
+    let mut result = Ok(());
     for _ in 0..max_attempts {
         if cli.keep_logo {
             let start = std::time::Instant::now();
@@ -662,27 +1149,27 @@ fn run_once(
             }
         }
         let size_before = layout::terminal_size();
-        run_once_inner(config, cli, modules, configs);
-        if !cli.keep_logo || layout::terminal_size() == size_before {
+        result = run_once_inner(config, cli, modules, configs);
+        if result.is_err() || !cli.keep_logo || layout::terminal_size() == size_before {
             break;
         }
     }
+    result
 }
 
 fn begin_keep_logo_frame(keep_logo: bool) {
-    if keep_logo && layout::colors_enabled() {
-        print!("\x1b[?2026h");
+    if keep_logo && stdout_is_tty() {
+        let _ = write_stdout("\x1b[?2026h");
         if terminal_supports_kitty() {
             rustfetch_render::clear_kitty_images();
         }
-        print!("\x1b[2J\x1b[3J\x1b[H");
+        let _ = write_stdout("\x1b[2J\x1b[3J\x1b[H");
     }
 }
 
 fn end_keep_logo_frame(keep_logo: bool) {
-    if keep_logo && layout::colors_enabled() {
-        print!("\x1b[?2026l");
-        let _ = std::io::stdout().flush();
+    if keep_logo && stdout_is_tty() {
+        let _ = write_stdout("\x1b[?2026l");
     }
 }
 
@@ -691,11 +1178,10 @@ fn run_once_inner(
     cli: &Cli,
     modules: &[Box<dyn Module>],
     configs: &[rustfetch_core::config::ModuleConfig],
-) {
+) -> Result<(), String> {
     let _wrap_guard = LineWrapGuard::new();
-    if (cli.clear || config.general.clear_screen.unwrap_or(false)) && layout::colors_enabled() {
-        print!("\x1b[2J\x1b[3J\x1b[H");
-        let _ = std::io::stdout().flush();
+    if (cli.clear || config.general.clear_screen.unwrap_or(false)) && stdout_is_tty() {
+        let _ = write_stdout("\x1b[2J\x1b[3J\x1b[H");
     }
     if !cli.no_logo && !cli.keep_logo && terminal_supports_kitty() {
         rustfetch_render::clear_kitty_images();
@@ -723,10 +1209,11 @@ fn run_once_inner(
                 .general
                 .logo
                 .image_dir
-                .as_deref()
-                .unwrap_or("~/.config/rustfetch/logos");
-            resolved_image_path = pick_random_image(dir, cli.keep_logo)
-                .or_else(|| pick_random_image("~/.config/fastfetch/logos", cli.keep_logo));
+                .clone()
+                .unwrap_or_else(|| default_logo_dir().to_string_lossy().into_owned());
+            let fastfetch_dir = fastfetch_logo_dir();
+            resolved_image_path = pick_random_image(&dir, cli.keep_logo)
+                .or_else(|| pick_random_image(&fastfetch_dir.to_string_lossy(), cli.keep_logo));
         }
         if resolved_image_path.is_none() {
             resolved_image_path = config.general.logo.image_path.clone();
@@ -920,9 +1407,11 @@ fn run_once_inner(
 
     if is_compact_term && cli.image.is_none() && cli.ascii.is_none() {
         begin_keep_logo_frame(cli.keep_logo);
-        layout::render(None, &info_lines, &render_opts);
+        if !layout::render(None, &info_lines, &render_opts) {
+            return Err(OUTPUT_ERROR.to_string());
+        }
         end_keep_logo_frame(cli.keep_logo);
-        return;
+        return Ok(());
     }
 
     if show_logo {
@@ -1027,9 +1516,11 @@ fn run_once_inner(
                 let card_h = (info_lines.len() + 4).min(max_allowed_rows);
                 begin_keep_logo_frame(cli.keep_logo);
                 let _ = rustfetch_render::render_background(image_path, card_w, card_h, -1);
-                layout::render(None, &info_lines, &render_opts);
+                if !layout::render(None, &info_lines, &render_opts) {
+                    return Err(OUTPUT_ERROR.to_string());
+                }
                 end_keep_logo_frame(cli.keep_logo);
-                return;
+                return Ok(());
             }
 
             let (est_cols, est_rows) =
@@ -1072,19 +1563,20 @@ fn run_once_inner(
                     h_pad,
                     cli.keep_logo,
                 ) {
-                    layout::render_with_image(
+                    if !layout::render_with_image(
                         actual_lines,
                         actual_cols,
                         h_pad,
                         &info_lines,
                         &render_opts,
-                    );
-                    print!("\x1b[?2026l");
-                    let _ = std::io::stdout().flush();
-                    return;
+                    ) {
+                        return Err(OUTPUT_ERROR.to_string());
+                    }
+                    let _ = write_stdout("\x1b[?2026l");
+                    return Ok(());
                 }
                 if cli.keep_logo {
-                    return;
+                    return Ok(());
                 }
             } else if use_sixel {
                 let total_fetch_w = if effective_logo_pos == "top" || effective_logo_pos == "bottom"
@@ -1102,30 +1594,34 @@ fn run_once_inner(
                 begin_keep_logo_frame(cli.keep_logo);
                 if effective_logo_pos != "top" && effective_logo_pos != "bottom" && reserve_rows > 1
                 {
-                    print!(
+                    let cursor_up = format!(
                         "{}\x1b[{}A\r",
                         "\n".repeat(reserve_rows - 1),
                         reserve_rows - 1
                     );
+                    if !write_stdout(&cursor_up) {
+                        return Err(OUTPUT_ERROR.to_string());
+                    }
                 }
 
-                if h_pad > 0 {
-                    print!("{}", " ".repeat(h_pad));
-                    let _ = std::io::stdout().flush();
+                if h_pad > 0 && !write_stdout(&" ".repeat(h_pad)) {
+                    return Err(OUTPUT_ERROR.to_string());
                 }
 
                 if let Some((actual_cols, actual_lines)) =
                     rustfetch_render::render_sixel_ex(image_path, target_cols, max_image_rows)
                 {
-                    layout::render_with_image(
+                    if !layout::render_with_image(
                         actual_lines,
                         actual_cols,
                         h_pad,
                         &info_lines,
                         &render_opts,
-                    );
+                    ) {
+                        return Err(OUTPUT_ERROR.to_string());
+                    }
                     end_keep_logo_frame(cli.keep_logo);
-                    return;
+                    return Ok(());
                 }
                 end_keep_logo_frame(cli.keep_logo);
             } else if use_iterm {
@@ -1144,30 +1640,34 @@ fn run_once_inner(
                 begin_keep_logo_frame(cli.keep_logo);
                 if effective_logo_pos != "top" && effective_logo_pos != "bottom" && reserve_rows > 1
                 {
-                    print!(
+                    let cursor_up = format!(
                         "{}\x1b[{}A\r",
                         "\n".repeat(reserve_rows - 1),
                         reserve_rows - 1
                     );
+                    if !write_stdout(&cursor_up) {
+                        return Err(OUTPUT_ERROR.to_string());
+                    }
                 }
 
-                if h_pad > 0 {
-                    print!("{}", " ".repeat(h_pad));
-                    let _ = std::io::stdout().flush();
+                if h_pad > 0 && !write_stdout(&" ".repeat(h_pad)) {
+                    return Err(OUTPUT_ERROR.to_string());
                 }
 
                 if let Some((actual_cols, actual_lines)) =
                     rustfetch_render::render_iterm_ex(image_path, target_cols, max_image_rows)
                 {
-                    layout::render_with_image(
+                    if !layout::render_with_image(
                         actual_lines,
                         actual_cols,
                         h_pad,
                         &info_lines,
                         &render_opts,
-                    );
+                    ) {
+                        return Err(OUTPUT_ERROR.to_string());
+                    }
                     end_keep_logo_frame(cli.keep_logo);
-                    return;
+                    return Ok(());
                 }
                 end_keep_logo_frame(cli.keep_logo);
             }
@@ -1183,16 +1683,21 @@ fn run_once_inner(
                     .unwrap_or(target_cols);
                 let logo_block = LogoBlock { lines, width: w };
                 begin_keep_logo_frame(cli.keep_logo);
-                layout::render(Some(&logo_block), &info_lines, &render_opts);
+                if !layout::render(Some(&logo_block), &info_lines, &render_opts) {
+                    return Err(OUTPUT_ERROR.to_string());
+                }
                 end_keep_logo_frame(cli.keep_logo);
-                return;
+                return Ok(());
             }
         }
     }
 
     begin_keep_logo_frame(cli.keep_logo);
-    layout::render(logo_block.as_ref(), &info_lines, &render_opts);
+    if !layout::render(logo_block.as_ref(), &info_lines, &render_opts) {
+        return Err(OUTPUT_ERROR.to_string());
+    }
     end_keep_logo_frame(cli.keep_logo);
+    Ok(())
 }
 
 use json_export::run_json;
@@ -1212,10 +1717,10 @@ fn run_waybar(
     config: &Config,
     modules: &[Box<dyn Module>],
     configs: &[rustfetch_core::config::ModuleConfig],
-) {
+) -> Result<(), String> {
     let info_lines = gather_info_lines(config, modules, configs, None, None);
     let header = build_header();
-    json_export::run_waybar(config, &info_lines, header.as_deref());
+    json_export::run_waybar(config, &info_lines, header.as_deref())
 }
 
 pub fn render_sparkline(samples: &[u8], colored: bool) -> String {
@@ -1247,11 +1752,42 @@ pub fn render_sparkline(samples: &[u8], colored: bool) -> String {
     out
 }
 
-fn format_bar(percent: u8, width: usize, colored: bool, invert_color: bool) -> String {
-    let width = if width == 0 { 10 } else { width };
+/// Canonical progress-bar glyph styles accepted by config bar_style values.
+pub const BAR_STYLES: &[&str] = &["blocks", "line", "dots", "ascii"];
+
+/// Resolves a configured bar style name; unknown styles fall back to "blocks".
+fn bar_style_name(style: Option<&str>) -> &'static str {
+    match style.map(str::trim).map(str::to_ascii_lowercase) {
+        Some(name) if name == "line" => "line",
+        Some(name) if name == "dots" => "dots",
+        Some(name) if name == "ascii" => "ascii",
+        _ => "blocks",
+    }
+}
+
+/// Filled and empty glyphs for a resolved bar style.
+fn bar_glyphs(style: &str) -> (char, char) {
+    match style {
+        "line" => ('━', '─'),
+        "dots" => ('●', '○'),
+        "ascii" => ('#', '-'),
+        _ => ('■', '-'),
+    }
+}
+
+fn format_bar(
+    percent: u8,
+    width: usize,
+    colored: bool,
+    invert_color: bool,
+    style: Option<&str>,
+) -> String {
+    // Keep the rendered bar bounded regardless of config values.
+    let width = width.clamp(1, 256);
     let percent = percent.min(100);
     let elapsed = ((percent as usize * width) + 50) / 100;
     let remaining = width.saturating_sub(elapsed);
+    let (filled_glyph, track_glyph) = bar_glyphs(bar_style_name(style));
 
     let color_code = if !colored {
         ""
@@ -1280,9 +1816,9 @@ fn format_bar(percent: u8, width: usize, colored: bool, invert_color: bool) -> S
     format!(
         "{}[{}{}{}{}]",
         color_code,
-        "■".repeat(elapsed),
+        filled_glyph.to_string().repeat(elapsed),
         dim_track,
-        "-".repeat(remaining),
+        track_glyph.to_string().repeat(remaining),
         color_code
     ) + reset
 }
@@ -1301,7 +1837,7 @@ fn gather_info_lines(
         .filter_map(|(result, mc)| {
             let is_divider = mc.name == "break" || mc.name == "divider";
             if is_divider {
-                let label = if let Some(lbl) = &mc.label {
+                let raw_label = if let Some(lbl) = &mc.label {
                     if !lbl.is_empty() {
                         format!("---DIVIDER:{lbl}---")
                     } else {
@@ -1312,7 +1848,7 @@ fn gather_info_lines(
                 };
                 return Some((
                     InfoLine {
-                        label,
+                        label: text::sanitize_terminal(&raw_label),
                         value: String::new(),
                         icon: None,
                         color: String::new(),
@@ -1322,31 +1858,30 @@ fn gather_info_lines(
             }
 
             let info = result?;
-            let label = if mc.name == "custom" {
+            let raw_label = if mc.name == "custom" {
                 mc.label.clone().unwrap_or_default()
             } else {
                 mc.label.clone().unwrap_or(info.label)
             };
+            // System/network/config supplied text must never inject terminal
+            // escape sequences (USER, SSID, media titles, custom values, ...).
+            let label = text::sanitize_terminal(&raw_label);
 
-            let mut value = if mc.name == "custom" {
+            let raw_value = if mc.name == "custom" {
                 mc.value.clone().unwrap_or_default()
             } else {
                 info.value
             };
+            let mut value = text::sanitize_terminal(&raw_value);
 
             if let Some(fmt) = &mc.format {
-                value = fmt.replace("{value}", &value).replace("{}", &value);
-            }
-
-            if mc.name == "update" && layout::colors_enabled() {
-                value = format!(
-                    "\x1b]8;;https://github.com/MehmetCanWT/rustfetch/releases/latest\x07{value}\x1b]8;;\x07"
-                );
+                value =
+                    text::sanitize_terminal(&fmt.replace("{value}", &value).replace("{}", &value));
             }
 
             let icon = if config.general.icons {
                 if let Some(user_icon) = &mc.icon {
-                    Some(user_icon.clone())
+                    Some(text::sanitize_terminal(user_icon))
                 } else if mc.name == "os" {
                     Some(rustfetch_core::distro_icon(&value).to_string())
                 } else {
@@ -1360,7 +1895,7 @@ fn gather_info_lines(
                 if let Some(pct) = extract_percentage(&value) {
                     let width = mc.bar_width.unwrap_or(10);
                     let invert = mc.name == "battery";
-                    let bar = format_bar(pct, width, true, invert);
+                    let bar = format_bar(pct, width, true, invert, mc.bar_style.as_deref());
                     if value.contains('%') {
                         if let Some(pct_idx) = value.rfind('(') {
                             value = format!("{}{} {}", &value[..pct_idx], bar, &value[pct_idx..]);
@@ -1371,6 +1906,14 @@ fn gather_info_lines(
                         value = format!("{} {} ({}%)", value, bar, pct);
                     }
                 }
+            }
+
+            // Intentional OSC-8 hyperlink is added *after* sanitisation so that
+            // only this well-known escape sequence reaches the terminal.
+            if mc.name == "update" && layout::colors_enabled() {
+                value = format!(
+                    "\x1b]8;;https://github.com/MehmetCanWT/rustfetch/releases/latest\x07{value}\x1b]8;;\x07"
+                );
             }
 
             let theme_color = config
@@ -1440,14 +1983,6 @@ fn gather_info_lines(
         .collect()
 }
 
-#[cfg(unix)]
-static SIGINT_RECEIVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(unix)]
-extern "C" fn handle_sigint(_: libc::c_int) {
-    SIGINT_RECEIVED.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
 struct TermGuard {
     #[cfg(unix)]
     orig_termios: Option<libc::termios>,
@@ -1460,8 +1995,8 @@ impl TermGuard {
             execute,
             terminal::{Clear, ClearType},
         };
-        #[cfg(unix)]
-        SIGINT_RECEIVED.store(false, std::sync::atomic::Ordering::SeqCst);
+        install_termination_handlers();
+        reset_termination_flag();
         #[cfg(unix)]
         let mut orig_termios = None;
         #[cfg(unix)]
@@ -1470,20 +2005,13 @@ impl TermGuard {
             if libc::tcgetattr(libc::STDIN_FILENO, &mut orig) == 0 {
                 orig_termios = Some(orig);
                 let mut raw = orig;
-                // Retain ISIG so Ctrl+C sends SIGINT natively without buffering
+                // Retain ISIG so Ctrl+C still raises SIGINT instead of being
+                // buffered as an input byte.
                 raw.c_lflag &= !(libc::ICANON | libc::ECHO);
                 raw.c_cc[libc::VMIN] = 0;
                 raw.c_cc[libc::VTIME] = 0;
                 libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &raw);
             }
-            libc::signal(
-                libc::SIGINT,
-                handle_sigint as *const () as libc::sighandler_t,
-            );
-            libc::signal(
-                libc::SIGTERM,
-                handle_sigint as *const () as libc::sighandler_t,
-            );
         }
         #[cfg(not(unix))]
         let _ = crossterm::terminal::enable_raw_mode();
@@ -1506,8 +2034,6 @@ impl Drop for TermGuard {
             if let Some(ref orig) = self.orig_termios {
                 libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, orig);
             }
-            libc::signal(libc::SIGINT, libc::SIG_DFL);
-            libc::signal(libc::SIGTERM, libc::SIG_DFL);
         }
         #[cfg(not(unix))]
         {
@@ -1612,7 +2138,7 @@ fn run_3d(
     cli: &Cli,
     modules: &[Box<dyn Module>],
     configs: &[rustfetch_core::config::ModuleConfig],
-) {
+) -> Result<(), String> {
     use std::time::Duration;
 
     let distro_name = if config.general.logo.distro == "auto" {
@@ -1632,21 +2158,22 @@ fn run_3d(
     let size_scale = cli.size.unwrap_or(config.general.logo.three_d.size);
     let depth_scale = cli.depth.unwrap_or(config.general.logo.three_d.depth);
 
-    let (rotate_x, rotate_y) = if cli.rotate_x && !cli.rotate_y {
-        (true, false)
-    } else if cli.rotate_y && !cli.rotate_x {
-        (false, true)
-    } else {
-        (
+    let (rotate_x, rotate_y) = match (cli.rotate_x, cli.rotate_y) {
+        (true, true) => (true, true),
+        (true, false) => (true, false),
+        (false, true) => (false, true),
+        (false, false) => (
             config.general.logo.three_d.rotate_x,
             config.general.logo.three_d.rotate_y,
-        )
+        ),
     };
 
-    let shading_chars = cli
-        .shading
-        .as_deref()
-        .or(config.general.logo.three_d.shading.as_deref());
+    // Reject empty/whitespace-only custom ramps so the renderer never indexes
+    // into an empty character set (used to panic with index out of bounds).
+    let shading_chars = resolve_shading_chars(
+        cli.shading.as_deref(),
+        config.general.logo.three_d.shading.as_deref(),
+    );
 
     let custom_ascii_path = cli
         .ascii
@@ -1680,7 +2207,8 @@ fn run_3d(
             (m, d_outer, d_inner)
         });
 
-    let mut renderer = rustfetch_render::three_d::Renderer3D::new(shading_mode, shading_chars);
+    let mut renderer =
+        rustfetch_render::three_d::Renderer3D::new(shading_mode, shading_chars.as_deref());
     renderer.set_light_direction(&config.general.logo.three_d.light);
     renderer.size_scale = size_scale;
     renderer.speed = speed;
@@ -1744,7 +2272,6 @@ fn run_3d(
     let mut right_lines = layout::build_right_lines(&info_lines, &render_opts);
 
     let _guard = TermGuard::enter();
-    let mut stdout = std::io::stdout();
 
     let mut angle_x = 0.0f32;
     let mut angle_y = 0.0f32;
@@ -1790,12 +2317,14 @@ fn run_3d(
         cli.frames.or(config.general.logo.three_d.frames)
     };
 
-    let exit_on_key = !cli.hold;
+    let hold = cli.hold || config.general.logo.three_d.hold.unwrap_or(false);
+    let exit_on_key =
+        !hold && (cli.exit_on_key || config.general.logo.three_d.exit_on_key.unwrap_or(true));
     let mut prev_term_size = layout::terminal_size();
+    let mut write_failed = false;
 
     loop {
-        #[cfg(unix)]
-        if SIGINT_RECEIVED.load(std::sync::atomic::Ordering::SeqCst) {
+        if terminate_requested() {
             break;
         }
         if let Some(limit) = max_frames {
@@ -1807,7 +2336,10 @@ fn run_3d(
         let (term_cols, term_rows) = layout::terminal_size();
         if (term_cols, term_rows) != prev_term_size {
             prev_term_size = (term_cols, term_rows);
-            let _ = stdout.write_all(b"\x1b[2J\x1b[H");
+            if !write_stdout("\x1b[2J\x1b[H") {
+                write_failed = true;
+                break;
+            }
             right_lines = layout::build_right_lines(&info_lines, &render_opts);
         }
 
@@ -1875,8 +2407,10 @@ fn run_3d(
             (term_cols, term_rows),
         );
 
-        let _ = stdout.write_all(frame_buf.as_bytes());
-        let _ = stdout.flush();
+        if !write_stdout(&frame_buf) {
+            write_failed = true;
+            break;
+        }
 
         frame_idx += 1;
 
@@ -1985,9 +2519,14 @@ fn run_3d(
     running.store(false, std::sync::atomic::Ordering::Relaxed);
     drop(_guard);
 
+    if write_failed {
+        return Err(OUTPUT_ERROR.to_string());
+    }
+
     // Fallback immediately from 3D canvas to static 2D ASCII logo of the same distro
-    print!("\x1b[2J\x1b[H");
-    let _ = std::io::stdout().flush();
+    if !write_stdout("\x1b[2J\x1b[H") {
+        return Err(OUTPUT_ERROR.to_string());
+    }
 
     let _wrap_guard = LineWrapGuard::new();
     let (logo_block, _) = build_ascii_logo_block(
@@ -1997,7 +2536,10 @@ fn run_3d(
         cli.color.as_deref(),
     );
 
-    layout::render(Some(&logo_block), &info_lines, &render_opts);
+    if !layout::render(Some(&logo_block), &info_lines, &render_opts) {
+        return Err(OUTPUT_ERROR.to_string());
+    }
+    Ok(())
 }
 
 fn build_ascii_logo_block(
@@ -2066,7 +2608,7 @@ fn run_ascii_animation(
     cli: &Cli,
     modules: &[Box<dyn Module>],
     configs: &[rustfetch_core::config::ModuleConfig],
-) {
+) -> Result<(), String> {
     use std::time::{Duration, Instant};
 
     let anim_path = cli
@@ -2079,8 +2621,7 @@ fn run_ascii_animation(
     let path_str = match anim_path {
         Some(p) => p,
         None => {
-            eprintln!("Error: No ASCII animation path specified. Use --ascii-anim <PATH> or set general.logo.animation.path in config.toml");
-            return;
+            return Err("No ASCII animation path specified. Use --ascii-anim <PATH> or set general.logo.animation.path in config.toml".to_string());
         }
     };
 
@@ -2088,13 +2629,12 @@ fn run_ascii_animation(
     let p = std::path::Path::new(expanded.as_ref());
     let frames = match rustfetch_core::ascii::load_ascii_frames(p) {
         Ok(f) if !f.is_empty() => f,
-        Ok(_) => {
-            eprintln!("Error: No ASCII frames found in {}", p.display());
-            return;
-        }
+        Ok(_) => return Err(format!("No ASCII frames found in {}", p.display())),
         Err(e) => {
-            eprintln!("Error reading ASCII frames from {}: {e}", p.display());
-            return;
+            return Err(format!(
+                "Error reading ASCII frames from {}: {e}",
+                p.display()
+            ))
         }
     };
 
@@ -2150,7 +2690,6 @@ fn run_ascii_animation(
     let mut right_lines = layout::build_right_lines(&info_lines, &render_opts);
 
     let _guard = TermGuard::enter();
-    let mut stdout = std::io::stdout();
 
     let mut frame_idx = 0usize;
     let mut last_metric_refresh = Instant::now();
@@ -2165,9 +2704,10 @@ fn run_ascii_animation(
         && !config.general.logo.animation.hold.unwrap_or(false)
         && (cli.exit_on_key || config.general.logo.animation.exit_on_key.unwrap_or(true));
 
+    let mut write_failed = false;
+
     loop {
-        #[cfg(unix)]
-        if SIGINT_RECEIVED.load(std::sync::atomic::Ordering::SeqCst) {
+        if terminate_requested() {
             break;
         }
         if let Some(limit) = max_frames {
@@ -2206,8 +2746,10 @@ fn run_ascii_animation(
             (term_cols, term_rows),
         );
 
-        let _ = stdout.write_all(frame_buf.as_bytes());
-        let _ = stdout.flush();
+        if !write_stdout(&frame_buf) {
+            write_failed = true;
+            break;
+        }
 
         frame_idx += 1;
 
@@ -2267,6 +2809,12 @@ fn run_ascii_animation(
             }
         }
     }
+
+    drop(_guard);
+    if write_failed {
+        return Err(OUTPUT_ERROR.to_string());
+    }
+    Ok(())
 }
 
 fn run_live(
@@ -2274,7 +2822,7 @@ fn run_live(
     cli: &Cli,
     modules: &[Box<dyn Module>],
     configs: &[rustfetch_core::config::ModuleConfig],
-) {
+) -> Result<(), String> {
     use crossterm::{
         cursor::{Hide, MoveTo, Show},
         event::{poll, read, Event, KeyCode},
@@ -2294,6 +2842,10 @@ fn run_live(
         }
     }
 
+    install_termination_handlers();
+    reset_termination_flag();
+    install_terminal_panic_hook();
+
     let mut stdout = std::io::stdout();
     let _ = execute!(stdout, EnterAlternateScreen, Hide);
     let _ = enable_raw_mode();
@@ -2311,37 +2863,44 @@ fn run_live(
         }
     }
 
-    const THEMES: &[&str] = &[
-        "catppuccin",
-        "nord",
-        "dracula",
-        "gruvbox",
-        "tokyonight",
-        "rosepine",
-        "solarized",
-        "monokai",
-        "cyberpunk",
-    ];
+    let themes = rustfetch_render::THEME_NAMES;
     let mut theme_idx = live_config
         .general
         .theme
         .as_deref()
-        .and_then(|t| THEMES.iter().position(|&x| x.eq_ignore_ascii_case(t)))
+        .and_then(|t| themes.iter().position(|&x| x.eq_ignore_ascii_case(t)))
         .unwrap_or(0);
 
     let mut cpu_history: Vec<u8> = Vec::with_capacity(12);
     let mut mem_history: Vec<u8> = Vec::with_capacity(12);
+    let mut write_failed = false;
+
+    let mut prev_cpu_sample = rustfetch_core::modules::cpu_usage::sample_proc_stat();
+    if let Some((t1, i1)) = prev_cpu_sample {
+        std::thread::sleep(Duration::from_millis(20));
+        if let Some((t2, i2)) = rustfetch_core::modules::cpu_usage::sample_proc_stat() {
+            if let Some(pct) = rustfetch_core::modules::cpu_usage::usage_percent(t1, i1, t2, i2) {
+                cpu_history.push(pct as u8);
+            }
+            prev_cpu_sample = Some((t2, i2));
+        }
+    }
 
     loop {
-        if let Some(pct) = rustfetch_core::modules::cpu_usage::CpuUsage
-            .detect()
-            .and_then(|i| extract_percentage(&i.value))
-        {
-            if cpu_history.len() >= 12 {
-                cpu_history.remove(0);
-            }
-            cpu_history.push(pct);
+        if terminate_requested() {
+            break;
         }
+        let current_sample = rustfetch_core::modules::cpu_usage::sample_proc_stat();
+        if let (Some((t1, i1)), Some((t2, i2))) = (prev_cpu_sample, current_sample) {
+            if let Some(pct) = rustfetch_core::modules::cpu_usage::usage_percent(t1, i1, t2, i2) {
+                if cpu_history.len() >= 12 {
+                    cpu_history.remove(0);
+                }
+                cpu_history.push(pct as u8);
+            }
+        }
+        prev_cpu_sample = current_sample;
+
         if let Some(pct) = rustfetch_core::modules::memory::Memory
             .detect()
             .and_then(|i| extract_percentage(&i.value))
@@ -2352,17 +2911,35 @@ fn run_live(
             mem_history.push(pct);
         }
 
+        if stdout_is_tty() {
+            let _ = write_stdout("\x1b[?2026h");
+        }
         let _ = queue!(stdout, Clear(ClearType::All), MoveTo(0, 0));
-        run_once(&live_config, cli, modules, &live_configs);
+        let _ = stdout.flush();
+        if let Err(error) = run_once(&live_config, cli, modules, &live_configs) {
+            if stdout_is_tty() {
+                let _ = write_stdout("\x1b[?2026l");
+            }
+            eprintln!("error: {error}");
+            write_failed = true;
+            break;
+        }
 
         let colored = layout::colors_enabled();
         let cpu_spark = render_sparkline(&cpu_history, colored);
         let mem_spark = render_sparkline(&mem_history, colored);
         let active_theme = live_config.general.theme.as_deref().unwrap_or("default");
-        print!(
+        let footer = format!(
             "\r\n  \x1b[2mLive Graphs:\x1b[0m CPU {cpu_spark}   RAM {mem_spark}   \x1b[2m|  [t] Theme ({active_theme})  [b] Border  [q] Quit\x1b[0m\r\n"
         );
-        let _ = stdout.flush();
+        let footer_ok = write_stdout(&footer);
+        if stdout_is_tty() {
+            let _ = write_stdout("\x1b[?2026l");
+        }
+        if !footer_ok {
+            write_failed = true;
+            break;
+        }
 
         if let Ok(ready) = poll(Duration::from_millis(1000)) {
             if ready {
@@ -2382,8 +2959,8 @@ fn run_live(
                         Event::Key(key)
                             if key.code == KeyCode::Char('t') || key.code == KeyCode::Char('T') =>
                         {
-                            theme_idx = (theme_idx + 1) % THEMES.len();
-                            let next_theme = THEMES[theme_idx];
+                            theme_idx = (theme_idx + 1) % themes.len();
+                            let next_theme = themes[theme_idx];
                             live_config.general.theme = Some(next_theme.to_string());
                             if let Some(t) = rustfetch_render::get_theme(next_theme) {
                                 live_config.general.border_color = Some(format!(
@@ -2404,6 +2981,22 @@ fn run_live(
             }
         }
     }
+
+    drop(_guard);
+    if write_failed {
+        return Err(OUTPUT_ERROR.to_string());
+    }
+    Ok(())
+}
+
+/// Sanitises the identity fields and formats them, or None when unusable.
+fn build_header_from(user: Option<&str>, hostname: Option<&str>) -> Option<String> {
+    let user = text::sanitize_terminal(user?).trim().to_string();
+    let hostname = text::sanitize_terminal(hostname?).trim().to_string();
+    if user.is_empty() || hostname.is_empty() {
+        return None;
+    }
+    Some(format!("{user}@{hostname}"))
 }
 
 fn build_header() -> Option<String> {
@@ -2420,7 +3013,7 @@ fn build_header() -> Option<String> {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
         })?;
-    Some(format!("{user}@{hostname}"))
+    build_header_from(Some(&user), Some(&hostname))
 }
 
 fn detect_distro_name() -> String {
@@ -2439,15 +3032,21 @@ fn terminal_supports_kitty() -> bool {
     rustfetch_render::supports_kitty()
 }
 
-fn run_benchmark(modules: &[Box<dyn Module>]) {
+fn run_benchmark(modules: &[Box<dyn Module>]) -> Result<(), String> {
+    use std::fmt::Write as FmtWrite;
     use std::time::Instant;
 
-    println!("\x1b[1m\x1b[36mRustFetch Module Benchmark\x1b[0m");
-    println!("──────────────────────────────────────────────");
+    let colored = layout::colors_enabled();
+    let (bold, cyan, green, yellow, dim, reset) = if colored {
+        (
+            "\x1b[1m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[90m", "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
 
     let total_start = Instant::now();
     let mut module_timings = Vec::new();
-
     for m in modules {
         let start = Instant::now();
         let res = m.detect();
@@ -2456,34 +3055,42 @@ fn run_benchmark(modules: &[Box<dyn Module>]) {
     }
     let total_time = total_start.elapsed();
 
+    let mut output = String::new();
+    let _ = writeln!(output, "{bold}{cyan}RustFetch Module Benchmark{reset}");
+    let _ = writeln!(output, "──────────────────────────────────────────────");
+
     for (name, dur, detected) in &module_timings {
         let us = dur.as_micros();
         let ms = dur.as_secs_f64() * 1000.0;
         let status = if *detected { "✓" } else { "-" };
         let bar_len = ((us as f64 / 1500.0) * 12.0).clamp(1.0, 24.0) as usize;
         let bar = "■".repeat(bar_len);
-
         if us < 1000 {
-            println!(
-                "  [{status}] {:<12} : \x1b[32m{:>6} µs\x1b[0m  \x1b[90m{}\x1b[0m",
-                name, us, bar
+            let _ = writeln!(
+                output,
+                "  [{status}] {name:<12} : {green}{us:>6} µs{reset}  {dim}{bar}{reset}"
             );
         } else {
-            println!(
-                "  [{status}] {:<12} : \x1b[33m{:>6.2} ms\x1b[0m  \x1b[90m{}\x1b[0m",
-                name, ms, bar
+            let _ = writeln!(
+                output,
+                "  [{status}] {name:<12} : {yellow}{ms:>6.2} ms{reset}  {dim}{bar}{reset}"
             );
         }
     }
 
-    println!("──────────────────────────────────────────────");
+    let _ = writeln!(output, "──────────────────────────────────────────────");
     let total_us = total_time.as_micros();
     let total_ms = total_time.as_secs_f64() * 1000.0;
-    println!(
-        "  \x1b[1mTotal Time   : \x1b[36m{:.2} ms ({} µs)\x1b[0m ⚡",
-        total_ms, total_us
+    let _ = writeln!(
+        output,
+        "  {bold}Total Time   : {cyan}{total_ms:.2} ms ({total_us} µs){reset} ⚡"
     );
-    println!();
+    let _ = writeln!(output);
+
+    if !write_stdout(&output) {
+        return Err(OUTPUT_ERROR.to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2519,5 +3126,181 @@ mod tests {
             "ANSI escape codes must be stripped from text"
         );
         assert!(!text.is_empty());
+    }
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).expect("valid CLI arguments")
+    }
+
+    #[test]
+    fn test_format_bar_styles() {
+        assert_eq!(format_bar(50, 10, false, false, None), "[■■■■■-----]");
+        assert_eq!(
+            format_bar(50, 10, false, false, Some("blocks")),
+            "[■■■■■-----]"
+        );
+        assert_eq!(
+            format_bar(50, 10, false, false, Some("line")),
+            "[━━━━━─────]"
+        );
+        assert_eq!(
+            format_bar(50, 10, false, false, Some("dots")),
+            "[●●●●●○○○○○]"
+        );
+        assert_eq!(
+            format_bar(50, 10, false, false, Some("ascii")),
+            "[#####-----]"
+        );
+        // Unknown/empty styles fall back to the block style.
+        assert_eq!(format_bar(0, 4, false, false, Some("nope")), "[----]");
+        assert_eq!(format_bar(100, 4, false, false, Some("")), "[■■■■]");
+    }
+
+    #[test]
+    fn test_format_bar_width_is_clamped() {
+        // 0 -> 1 cell, 100000 -> 256 cells.
+        assert_eq!(format_bar(0, 0, false, false, None), "[-]");
+        assert_eq!(format_bar(50, 0, false, false, None), "[■]");
+        let clamped = format_bar(100, 100_000, false, false, None);
+        assert_eq!(clamped.chars().filter(|c| *c == '■').count(), 256);
+    }
+
+    #[test]
+    fn test_shading_parsers() {
+        for mode in SHADING_MODES {
+            assert!(parse_shading_mode(mode).is_ok(), "mode {mode} accepted");
+        }
+        assert!(parse_shading_mode("ascii").unwrap() == "ascii");
+        assert!(parse_shading_mode(" ASCII ").unwrap() == "ascii");
+        assert!(parse_shading_mode("").is_err());
+        assert!(parse_shading_mode("blocks2").is_err());
+        assert!(parse_shading_chars(" .:-=+*#%@").is_ok());
+        assert!(parse_shading_chars("").is_err());
+        assert!(parse_shading_chars("   ").is_err());
+        assert!(parse_shading_chars("\x1b[31m").is_err());
+        assert_eq!(parse_shading_chars(" .,- ").unwrap(), ".,-");
+    }
+
+    #[test]
+    fn test_resolve_shading_chars_ignores_empty_values() {
+        assert_eq!(
+            resolve_shading_chars(Some("+#"), None).as_deref(),
+            Some("+#")
+        );
+        assert_eq!(resolve_shading_chars(None, Some("  ")), None);
+        assert_eq!(
+            resolve_shading_chars(Some(""), Some(" .")).as_deref(),
+            Some(".")
+        );
+    }
+
+    #[test]
+    fn test_cli_bounds_are_enforced() {
+        assert!(Cli::try_parse_from(["rustfetch", "--width", "1"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--width", "512"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--width", "0"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--width", "513"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--height", "0"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--border-image-width", "513"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--border-image-height", "0"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--border-image-offset-x", "-10000"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--border-image-offset-x", "10001"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--speed", "nan"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--speed", "0"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--speed", "10"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--size", "0.05"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--size", "3"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--depth", "6"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--depth", "5"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--fps", "0"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--fps", "121"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--fps", "120"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--shading-mode", "bogus"]).is_err());
+        assert!(Cli::try_parse_from(["rustfetch", "--shading-mode", "dot"]).is_ok());
+        assert!(Cli::try_parse_from(["rustfetch", "--shading", ""]).is_err());
+    }
+
+    #[test]
+    fn test_build_header_sanitizes_control_sequences() {
+        let header = build_header_from(Some("evil\x1b]0;PWNED\x07user"), Some("host\x1b[31m"));
+        assert_eq!(header.as_deref(), Some("eviluser@host"));
+        assert!(!header.unwrap().contains('\x1b'));
+        assert_eq!(build_header_from(Some(""), Some("host")), None);
+        assert_eq!(build_header_from(Some("user"), Some("   ")), None);
+        assert_eq!(build_header_from(None, Some("host")), None);
+    }
+
+    #[test]
+    fn test_dump_config_uses_active_configuration() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustfetch_dump_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[general]\nseparator = \"@@\"\n").unwrap();
+
+        let cli = parse_cli(&["rustfetch", "-c", path.to_str().unwrap()]);
+        let (config, resolved_path) = resolve_config(&cli, false).expect("config resolved");
+        assert_eq!(resolved_path, path);
+        assert_eq!(config.general.separator, "@@");
+        let active_toml = config.to_toml_string().expect("active config serializes");
+        assert!(active_toml.contains("@@"));
+        // The template must stay the built-in default instead of the active values.
+        let default_toml = Config::to_default_toml();
+        assert!(!default_toml.contains("@@"));
+        assert!(default_toml.contains("separator"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_unreadable_explicit_config_is_an_error() {
+        let cli = parse_cli(&["rustfetch", "-c", "/definitely/not/a/real/config.toml"]);
+        assert!(resolve_config(&cli, false).is_err());
+        // --generate-config / --import-fastfetch may target a path that does
+        // not exist yet, so they resolve with allow_missing_path = true.
+        assert!(resolve_config(&cli, true).is_ok());
+    }
+
+    #[test]
+    fn test_apply_cli_overrides_image_enables_logo() {
+        let mut config = Config::default();
+        config.general.logo.enabled = false;
+        let cli = parse_cli(&["rustfetch", "-i", "/tmp/logo.png"]);
+        apply_cli_overrides(&mut config, &cli);
+        assert!(config.general.logo.enabled);
+        assert_eq!(
+            config.general.logo.image_path.as_deref(),
+            Some("/tmp/logo.png")
+        );
+        assert!(!config.general.logo.random_image);
+    }
+
+    #[test]
+    fn test_mode_conflict_warnings() {
+        let warnings = mode_conflict_warnings(&[
+            ("--benchmark", false),
+            ("--waybar", false),
+            ("--json", true),
+            ("--3d", false),
+            ("--ascii-anim", false),
+            ("--live", true),
+        ]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("--live"));
+        assert!(warnings[0].contains("--json"));
+        assert!(mode_conflict_warnings(&[("--json", false)]).is_empty());
+    }
+
+    #[test]
+    fn test_no_update_check_disables_updates() {
+        let cli = parse_cli(&["rustfetch", "--no-update-check"]);
+        let (config, _) = resolve_config(&cli, true).expect("config resolved");
+        assert!(!config.general.check_updates);
     }
 }

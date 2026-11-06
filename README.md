@@ -2,7 +2,7 @@
 
 # 🦀 RustFetch (`rfetch`)
 
-**Blazing-fast (~4ms), memory-safe, zero-fork Linux system fetch & hardware telemetry tool written in pure Rust.**
+**Blazing-fast, memory-safe Linux system fetch & hardware telemetry tool written in pure Rust, with fork-free kernel telemetry.**
 
 [![CI](https://github.com/MehmetCanWT/rustfetch/actions/workflows/ci.yml/badge.svg)](https://github.com/MehmetCanWT/rustfetch/actions/workflows/ci.yml)
 [![Release](https://github.com/MehmetCanWT/rustfetch/actions/workflows/release.yml/badge.svg)](https://github.com/MehmetCanWT/rustfetch/releases)
@@ -17,12 +17,12 @@
 
 **RustFetch** (`rustfetch` / `rfetch`) is built from the ground up in Rust to replace slow shell-script fetchers and fragile C configs with a single static-friendly binary that starts in **~4 milliseconds**:
 
-- ⚡ **Zero-Fork Kernel Telemetry (`~4ms`)**: Reads hardware topology directly from `/proc`, `/sys/bus/pci/devices`, `/sys/class/drm` (pure-Rust EDID binary parser), `/sys/class/hwmon`, `/sys/class/power_supply`, and `statx`/`statvfs` syscalls.
-- 🖼️ **True Terminal Graphics (`Kitty`, `Sixel`, `Halfblock`)**: Renders crisp PNG/JPG/WebP/GIF artwork with automatic dominant-color & 16-color palette extraction (`.color` sidecar cache), aspect-ratio fitting, and atomic **Kitty Synchronized Output (`?2026h`)** on window resize.
-- 🧊 **Real-Time 3D Spinning ASCII Relief (`--3d`)**: Extrudes any built-in distro logo or custom ASCII file into a 3D mesh with Blinn-Phong lighting and sub-cell `ascii`, `blocks`, `braille`, or `sextants` rasterization. Press **any key** or run any command and it **instantly falls back to the static 2D ASCII logo** of the same distro without eating your keystrokes.
-- 📈 **Interactive Live Monitor (`--live`) & TUI Config Builder (`--setup`)**: Real-time CPU/RAM Unicode sparkline graphs (`▁▂▃▄▅▆▇█`) with hot-swappable themes, plus an interactive terminal UI to toggle modules, themes, and presets with automatic `.bak` config backups.
+- ⚡ **Fork-Free Kernel Telemetry**: Core telemetry reads hardware topology directly from `/proc`, `/sys/bus/pci/devices`, `/sys/class/drm` (pure-Rust EDID binary parser), `/sys/class/hwmon`, `/sys/class/power_supply`, and `statx`/`statvfs` syscalls. Collectors that have no kernel interface — package-manager fallbacks, the GitHub update check, and the optional sound/Wi-Fi/Bluetooth/media modules — may invoke external tools (`rpm`, `curl`, `wpctl`, `nmcli`, `bluetoothctl`, `playerctl`); those calls are timeout-bounded and skipped when the tool is missing.
+- 🖼️ **True Terminal Graphics (`Kitty`, `Sixel`, `Halfblock`)**: Renders crisp PNG/JPG/WebP/GIF artwork with automatic dominant-color & 16-color palette extraction (a `.color` sidecar file is written next to the image), aspect-ratio fitting, and atomic **Kitty Synchronized Output (`?2026h`)** on window resize.
+- 🧊 **Real-Time 3D Spinning ASCII Relief (`--3d`)**: Extrudes any built-in distro logo or custom ASCII file into a 3D mesh with Blinn-Phong lighting and sub-cell `ascii`, `blocks`, `sextants`, `braille`, `dot`, `wireframe`, or `solid` rasterization. Press **any key** or run any command and it **instantly falls back to the static 2D ASCII logo** of the same distro without eating your keystrokes.
+- 📈 **Interactive Live Monitor (`--live`) & TUI Config Builder (`--setup`)**: Real-time CPU/RAM Unicode sparkline graphs (`▁▂▃▄▅▆▇█`) with hot-swappable themes, plus an interactive terminal UI to switch theme, logo, 3D display mode, border + border style, icons, centering, and update checking with automatic `.bak` config backups.
 - 🛡️ **Non-Destructive Config & Shell Resize Sync (`--install-hook`)**: Never overwrites your existing `~/.config/rustfetch/config.toml`. Shell startup integration automatically redraws and re-centers `rustfetch` when you resize a fresh terminal window before running your first command.
-- 🐾 **Self-Updating with Cat Breed Codenames (`--self-update`)**: Built-in cached GitHub release checker (6h TTL) with clickable OSC 8 terminal links and atomic in-place binary updates (`v0.1.0 "Turkish Van"`, `v0.1.1 "Turkish Angora"`, `v0.1.2 "Bengal"`, `v0.1.3 "Maine Coon"`, `v0.1.4 "Siamese"`).
+- 🐾 **Self-Updating with Cat Breed Codenames (`--self-update`)**: Built-in cached GitHub release checker (6h TTL) with clickable OSC 8 terminal links and atomic in-place binary updates (`v0.1.0 "Turkish Van"`, `v0.1.1 "Turkish Angora"`, `v0.1.2 "Bengal"`, `v0.1.3 "Maine Coon"`, `v0.1.4 "Siamese"`, `v0.1.5 "Ragdoll"`).
 
 ---
 
@@ -58,13 +58,15 @@ curl -fsSL https://raw.githubusercontent.com/MehmetCanWT/rustfetch/main/install.
 ### 2. Prebuilt Distro Packages (GitHub Releases)
 Download native packages directly from the [**Releases**](https://github.com/MehmetCanWT/rustfetch/releases/latest) page:
 
-| Distro / Platform | Artifact Format | Install Command |
+| Distro / Platform | Release Artifact | Install Command |
 | :--- | :--- | :--- |
-| **Arch / CachyOS / EndeavourOS** | `rustfetch-v*-arch-x86_64.pkg.tar.zst` | `sudo pacman -U rustfetch-v*-arch-x86_64.pkg.tar.zst` |
-| **Fedora / Bazzite / Nobara / RHEL** | `rustfetch-v*-fedora-x86_64.rpm` | `sudo dnf install ./rustfetch-v*-fedora-x86_64.rpm` *(or `rpm-ostree install`)* |
-| **Debian / Ubuntu / Pop!_OS / Mint** | `rustfetch-v*-debian-x86_64.deb` | `sudo apt install ./rustfetch-v*-debian-x86_64.deb` |
-| **NixOS / Nix Flakes** | `flake.nix` / `nixos-x86_64.tar.gz` | `nix run github:MehmetCanWT/rustfetch` |
-| **Generic Linux (`glibc` / `musl` / `aarch64`)** | `rustfetch-v*-linux-*.tar.gz` | Extract `rustfetch` & `rfetch` to `~/.local/bin/` |
+| **Arch / CachyOS / EndeavourOS** | `rustfetch-v<VER>-arch-x86_64.pkg.tar.zst` | `sudo pacman -U rustfetch-v<VER>-arch-x86_64.pkg.tar.zst` |
+| **Fedora / Bazzite / Nobara / RHEL** | `rustfetch-<VER>-1.fedora.x86_64.rpm` | `sudo dnf install ./rustfetch-<VER>-1.fedora.x86_64.rpm` *(or `rpm-ostree install`)* |
+| **Debian / Ubuntu / Pop!_OS / Mint** | `rustfetch_<VER>_debian_amd64.deb` | `sudo apt install ./rustfetch_<VER>_debian_amd64.deb` |
+| **NixOS / Nix Flakes** | `rustfetch-v<VER>-nixos-x86_64.tar.gz` / repo `flake.nix` | `nix run github:MehmetCanWT/rustfetch` |
+| **Generic Linux** (`x86_64` gnu/musl, `aarch64` gnu) | `rustfetch-v<VER>-linux-{gnu,musl}-x86_64.tar.gz`, `rustfetch-v<VER>-linux-gnu-aarch64.tar.gz` | Extract `rustfetch` & `rfetch` to `~/.local/bin/` |
+
+> `<VER>` is the release version without the leading `v` (for example `0.1.5`). Every release also publishes `SHA256SUMS.txt` next to these artifacts.
 
 ### 3. Build from Source (`cargo`)
 ```bash
@@ -85,11 +87,12 @@ Both `rustfetch` and the shorthand alias `rfetch` accept the same flags:
 # Standard run (uses ~/.config/rustfetch/config.toml)
 rustfetch
 
-# Interactive TUI Configuration Builder (toggle modules, presets & themes live)
+# Interactive TUI Configuration Builder (theme, logo, 3D mode, border, icons, centering, update check)
 rustfetch --setup
 
-# System & Terminal Capability Diagnostics (checks Kitty/Sixel, Nerd Fonts, sysfs/procfs, config)
+# System & Terminal Capability Diagnostics (graphics protocols, grid size, config validity/warnings, cache, update status)
 rustfetch --doctor
+rustfetch --doctor --no-update-check   # fully offline diagnostics
 
 # Update RustFetch in-place to the latest GitHub Release
 rustfetch --self-update
@@ -106,11 +109,15 @@ rustfetch --preset card --theme catppuccin
 rustfetch -l bazzite --border --border-style rounded
 rustfetch -i ~/Pictures/logo.png --protocol kitty
 
-# Discover all built-in modules, distros, themes, and presets
+# Discover all 39 modules, 38 logos, 13 themes, and 10 presets
 rustfetch --list-modules
 rustfetch --list-logos
 rustfetch --list-themes
 rustfetch --list-presets
+
+# Print the active configuration, or the commented default template
+rustfetch --dump-config
+rustfetch --print-default-config
 
 # Install or remove shell startup & window-resize hook (.bashrc / .zshrc / config.fish)
 rustfetch --install-hook
@@ -122,49 +129,50 @@ rustfetch --benchmark
 
 ---
 
-## 📊 Telemetry Modules (31 Built-in Collectors)
+## 📊 Telemetry Modules (39 Built-in Collectors)
 
-Run `rustfetch --list-modules` at any time to inspect all collectors. Full schema details are in [**docs/08-modules-and-icons.md**](docs/08-modules-and-icons.md).
+Run `rustfetch --list-modules` at any time to inspect all 39 canonical module names. Full schema details are in [**docs/08-modules-and-icons.md**](docs/08-modules-and-icons.md).
 
 | Module | Label | Data Source & Highlights |
 | :--- | :--- | :--- |
-| `os` | **OS** | `/etc/os-release` with distro-specific Nerd Font v3 glyph (`󰣇`, `󰣛`, ``, `󰕈`, `󱄅`, etc.) |
-| `os_age` | **OS Age** | Root `/` filesystem birth timestamp via Linux `statx(STATX_BTIME)` (`42 days, 5 hours`) |
+| `os` | **OS** | `/etc/os-release` with distro-specific Nerd Font v3 glyph (`󰣇`, `󰣛`, `󰕈`, `󱄅`, etc.) |
+| `os_age` | **OS Age** | Root `/` filesystem birth timestamp via Linux `statx(STATX_BTIME)` (file-mtime fallback) |
 | `host` | **Host** | `/sys/class/dmi/id/product_name` & `product_version` |
 | `board` | **Board** | `/sys/class/dmi/id/board_vendor` & `board_name` |
-| `kernel` | **Kernel** | Direct `libc::uname` syscall (`sysname`, `release`, `machine`) |
+| `kernel` | **Kernel** | `/proc/version`, falling back to `/proc/sys/kernel/osrelease` |
 | `uptime` | **Uptime** | `/proc/uptime` formatted into days, hours, and minutes |
-| `packages` | **Packages** | Native filesystem counters for `pacman`, `rpm`, `dpkg`, `flatpak`, `brew`, `nix`, `apk`, `xbps`, `emerge`, `snap` |
-| `shell` | **Shell** | Active user shell from `$SHELL` / parent process |
-| `desktop` | **Desktop** | Desktop Environment & Wayland/X11 Window Manager (`KDE`, `GNOME`, `Hyprland`, `Sway`, `Niri`, `MangoWM`, `COSMIC`) |
-| `font` | **Font** | GTK3/GTK4/Qt/gsettings active UI font |
-| `display` | **Display** | Pure-Rust `/sys/class/drm` & EDID 1.4/2.0 timing parser (resolution + refresh rate Hz) |
-| `terminal` | **Terminal** | `/proc/$PID/stat` parent tree walk & environment inspection (`kitty`, `ghostty`, `foot`, `wezterm`, `alacritty`) |
-| `cpu` | **CPU** | `/proc/cpuinfo` model name, logical thread count, and boost clock |
-| `cpu_usage` | **CPU Usage** | `/proc/stat` jiffies utilization percentage + optional progress bar |
-| `temp` | **Temp** | `/sys/class/hwmon` & `/sys/class/thermal` package/core sensor temperature (`°C`) |
+| `packages` | **Packages** | Filesystem counters for `pacman`, `dpkg`, `rpm` (sqlite), `flatpak`, `snap`, `nix`, `apk`, `xbps`, `emerge`; 2 h TTL cache and an `rpm -qa` fallback |
+| `shell` | **Shell** | Active shell name from `$SHELL` with a parent-process fallback (the version is not detected) |
+| `desktop` | **Desktop** | Desktop environment & Wayland/X11 window manager (`KDE`, `GNOME`, `Hyprland`, `Sway`, `Niri`, `MangoWM`, `COSMIC`) |
+| `font` | **Font** | UI font from KDE `kdeglobals` or GTK 3/4 `settings.ini` |
+| `display` | **Display** | `/sys/class/drm` EDID parser: header + checksum, four detailed timing descriptors, CTA-861 extension blocks (resolution + refresh rate) |
+| `terminal` | **Terminal** | Parent-process tree & environment inspection (`kitty`, `ghostty`, `foot`, `wezterm`, `alacritty`) |
+| `cpu` | **CPU** | `/proc/cpuinfo` model name and logical thread count |
+| `cpu_usage` | **CPU Usage** | `/proc/stat` jiffies utilization percentage (shown as a progress bar in `--live`) |
+| `temp` | **Temp** | `/sys/class/hwmon` & `/sys/class/thermal` sensor temperature (`°C`) |
 | `gpu` | **GPU** | Graphics processor (priority dGPU with iGPU fallback, configurable via `type = "dgpu"` / `"igpu"` / `"all"`) |
-| `dgpu` | **dGPU** | Dedicated discrete GPU only (`None` if absent) |
-| `igpu` | **iGPU** | Integrated GPU only (`None` if absent) |
-| `gpu_driver` | **GPU Driver** | Bound kernel module from `/sys/bus/pci/devices/*/driver` (`nvidia 565.77`, `amdgpu`, `xe`, `i915`) |
-| `memory` | **Memory** | `/proc/meminfo` used / total GiB + optional percentage bar |
-| `swap` | **Swap** | `/proc/meminfo` used / total swap GiB |
-| `disk` | **Disk** | `libc::statvfs` with Ostree/Bazzite `/sysroot` awareness and multi-mount support (`path = "/home"`) |
+| `dgpu` | **dGPU** | Dedicated discrete GPU only (absent when none is detected) |
+| `igpu` | **iGPU** | Integrated GPU only (absent when none is detected) |
+| `gpu_driver` | **GPU Driver** | Bound kernel module from `/sys/bus/pci/devices/*/driver` (`amdgpu`, `xe`, `i915`, `nvidia`, ...) |
+| `memory` | **Memory** | `/proc/meminfo` used / total + optional percentage bar |
+| `swap` | **Swap** | `/proc/meminfo` swap used / total |
+| `disk` | **Disk** | `statvfs` with Ostree/Bazzite `/sysroot` awareness and multi-mount support (`path = "/home"`) |
 | `battery` | **Battery** | `/sys/class/power_supply/BAT*` charge %, AC status, cycle count, and design-vs-full health % |
 | `power_profile` | **Power** | `/sys/firmware/acpi/platform_profile`, CPU scaling governor & `energy_performance_preference` |
 | `brightness` | **Brightness** | `/sys/class/backlight` percentage |
-| `sound` | **Sound** | PipeWire / WirePlumber (`wpctl`) / PulseAudio sink volume & mute state |
-| `wifi` | **Wi-Fi** | Connected SSID, signal strength, and frequency band (`iw` / `nmcli`) |
-| `net_io` | **Network** | Live RX/TX throughput (`↓ 12.4 MiB/s ↑ 1.1 MiB/s`) & total traffic from `/proc/net/dev` |
-| `bluetooth` | **Bluetooth** | Connected Bluetooth peripherals & battery percentages |
-| `local_ip` | **Local IP** | Primary LAN IPv4 address |
+| `sound` | **Sound** | Sink volume & mute state via `wpctl` / PulseAudio (optional external tool) |
+| `media` | **Media** | Active MPRIS track via `playerctl` (optional external tool) |
+| `bluetooth` | **Bluetooth** | Connected Bluetooth peripherals via `bluetoothctl` (optional external tool) |
+| `wifi` | **Wi-Fi** | Connected SSID, signal strength, and band via `iw`, `nmcli`, or `iwgetid` (optional external tools) |
+| `net_io` | **Network** | RX/TX totals for the default-route interface from `/sys/class/net`; a throughput rate is shown when re-run within 10 s |
+| `local_ip` | **Local IP** | Primary LAN IPv4 address via `getifaddrs` |
 | `locale` | **Locale** | System `$LANG` / `$LC_ALL` encoding |
-| `processes` | **Processes** | Running task count and 1-minute load average from `/proc/loadavg` |
+| `processes` | **Processes** | Total and running process counts from `/proc/loadavg` (PID-directory fallback) |
 | `init` | **Init** | PID 1 init system (`systemd`, `openrc`, `runit`, `dinit`, `s6`) |
 | `container` | **Container** | Detects Docker, Podman, Distrobox, Toolbox, LXC, systemd-nspawn, Flatpak |
-| `media` | **Media** | Active MPRIS track (`playerctl`, optional) |
-| `update` | **Update** | Cached (6h TTL) GitHub release notifier with cat-breed codename & OSC 8 hyperlink |
-| `custom` / `break` | *Custom* | Arbitrary user labels/values and section dividers (`---DIVIDER:Hardware---`) |
+| `update` | **Update** | Cached (6 h TTL) GitHub release notifier with cat-breed codename & OSC 8 hyperlink |
+| `custom` | **Custom** | Static `label`/`value` pair from the config (no command execution) |
+| `break` / `divider` | *Divider* | Internal section divider line (`├──┤`), optional `label` |
 
 ---
 
@@ -172,20 +180,27 @@ Run `rustfetch --list-modules` at any time to inspect all collectors. Full schem
 
 RustFetch creates `~/.config/rustfetch/config.toml` only when none exists and **never overwrites your custom edits**. You can also migrate an existing Fastfetch setup with `rustfetch --import-fastfetch`.
 
+Print the **active** configuration (merged, with your overrides) with `rustfetch --dump-config`; `rustfetch --print-default-config` prints the commented default template instead.
+
 ```toml
+# Optional base layout preset; explicit values below override it.
+# preset = "card"
+
 [general]
 separator = ":"
 padding = 1
 center = true
 icons = true
 icon_only = false
+key_type = "both"            # "both", "icon", "title", "none" (none = value only)
+box_padding = 1              # Inner horizontal padding of the border box
 check_updates = true
 # theme = "catppuccin"
 # gradient = ["#89b4fa", "#b4befe", "#cba6f7"]
 
 [general.border]
 enabled = false
-style = "rounded"            # "rounded", "single", "double", "thick", "dashed", "block", "ascii", "brackets"
+style = "rounded"            # "rounded", "light", "heavy", "double", "dashed", "block", "ascii", "brackets"
 color = "cyan"
 padding = 1
 
@@ -199,12 +214,16 @@ rows = 1
 
 [general.logo]
 enabled = true
+# ASCII logo: "left", "right", "top", "bottom", "behind".
+# Image logo: "left" (default), "top", "behind" — asking for "right"/"bottom"
+# with an image prints a warning and falls back to "left".
+position = "left"
 distro = "auto"              # "auto", "bazzite", "cachyos", "arch", "fedora", "nixos", "ubuntu", "gentoo", ...
 image_dir = "~/.config/rustfetch/logos"
 image_width_cols = 42
 random_image = true
 auto_color = true            # Extract dominant accent color from image
-protocol = "auto"            # "auto", "kitty", "sixel", "halfblocks"
+protocol = "auto"            # "auto", "kitty", "sixel", "iterm", "halfblock"
 
 [general.logo.three_d]
 enabled = false
@@ -215,7 +234,7 @@ size = 1.0
 depth = 1.0
 width = 42
 height = 24
-shading_mode = "ascii"       # "ascii", "blocks", "braille", "sextants", "dot", "wireframe", "solid"
+shading_mode = "ascii"       # ascii, blocks, sextants, braille, dot, wireframe, solid
 light = "top-left"
 
 [[modules]]
@@ -243,6 +262,7 @@ name = "gpu_driver"
 [[modules]]
 name = "memory"
 bar = true
+bar_style = "blocks"         # "blocks", "line", "dots", "ascii"
 [[modules]]
 name = "disk"
 path = "/"
@@ -282,7 +302,7 @@ name = "update"
 ## 🧪 Development & Testing
 
 ```bash
-# Run formatting check, Clippy lints, and all 180+ unit tests
+# Run formatting check, Clippy lints, and the full unit-test suite
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --workspace

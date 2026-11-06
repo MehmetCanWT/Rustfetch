@@ -80,7 +80,8 @@ pub fn detect_os_birth_timestamp() -> Option<u64> {
         return oldest;
     }
 
-    // Fallback to mtime of system files if statx btime is unsupported
+    // Fallback to the OLDEST mtime of system files if statx btime is unsupported.
+    let mut fallback_candidates = Vec::new();
     for fallback in [
         "/etc/machine-id",
         "/var/lib/dbus/machine-id",
@@ -89,15 +90,21 @@ pub fn detect_os_birth_timestamp() -> Option<u64> {
         if let Ok(meta) = std::fs::metadata(fallback) {
             if let Ok(modified) = meta.modified() {
                 if let Ok(dur) = modified.duration_since(UNIX_EPOCH) {
-                    if dur.as_secs() > 946_684_800 {
-                        return Some(dur.as_secs());
+                    let secs = dur.as_secs();
+                    if secs > 946_684_800 {
+                        fallback_candidates.push(secs);
                     }
                 }
             }
         }
     }
 
-    None
+    oldest_timestamp(fallback_candidates)
+}
+
+/// Returns the oldest timestamp of the given candidates (sanity filter helper).
+pub fn oldest_timestamp(candidates: impl IntoIterator<Item = u64>) -> Option<u64> {
+    candidates.into_iter().min()
 }
 
 #[cfg(test)]
@@ -107,6 +114,15 @@ mod tests {
     #[test]
     fn test_os_age_module_name() {
         assert_eq!(OsAge.name(), "os_age");
+    }
+
+    #[test]
+    fn test_oldest_timestamp() {
+        assert_eq!(
+            oldest_timestamp([1_700_000_100, 1_700_000_000, 1_700_000_050]),
+            Some(1_700_000_000)
+        );
+        assert_eq!(oldest_timestamp(Vec::<u64>::new()), None);
     }
 
     #[test]

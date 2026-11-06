@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -20,12 +21,25 @@ fn is_default_gpu_config(cfg: &GpuConfig) -> bool {
     cfg.r#type == "dgpu"
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Config {
     pub general: GeneralConfig,
     pub modules: Vec<ModuleConfig>,
     #[serde(skip_serializing_if = "is_default_gpu_config")]
     pub gpu: GpuConfig,
+    /// Diagnostics collected while this configuration was loaded.
+    ///
+    /// Not part of the configuration identity: it is skipped during
+    /// serialization and ignored by equality checks. Read it through
+    /// [`Config::warnings`], which also re-validates the current values.
+    #[serde(skip)]
+    pub load_warnings: Vec<String>,
+}
+
+impl PartialEq for Config {
+    fn eq(&self, other: &Self) -> bool {
+        self.general == other.general && self.modules == other.modules && self.gpu == other.gpu
+    }
 }
 
 #[derive(Deserialize)]
@@ -52,7 +66,9 @@ struct ModulesSectionHelper {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct ConfigRaw {
-    general: Option<GeneralConfig>,
+    /// Optional named preset used as the base configuration, e.g. `preset = "card"`.
+    preset: Option<String>,
+    general: Option<GeneralConfigRaw>,
     modules: Option<ModulesFieldHelper>,
     gpu: Option<GpuConfigHelper>,
     border: Option<BorderFieldHelper>,
@@ -60,6 +76,10 @@ struct ConfigRaw {
     border_images: Option<Vec<BorderImageConfig>>,
     colors: Option<ColorsConfig>,
     logo: Option<LogoConfig>,
+    /// Unknown top-level keys are collected so [`Config::warnings`] can report them
+    /// instead of silently ignoring a typo.
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde::de::IgnoredAny>,
 }
 
 impl<'de> Deserialize<'de> for Config {
@@ -68,62 +88,82 @@ impl<'de> Deserialize<'de> for Config {
         D: serde::Deserializer<'de>,
     {
         let raw = ConfigRaw::deserialize(deserializer)?;
-        let mut general = raw.general.unwrap_or_default();
+        let mut warnings: Vec<String> = Vec::new();
+
+        for key in raw.unknown.keys() {
+            warnings.push(format!("unknown top-level key '{key}' ignored"));
+        }
+
+        // A named preset is the base layer; explicit user values are applied on top.
+        let mut cfg = match raw.preset.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => match Config::from_preset(name) {
+                Some(base) => base,
+                None => {
+                    warnings.push(format!(
+                        "unknown preset '{name}' ignored (falling back to defaults)"
+                    ));
+                    Config::default()
+                }
+            },
+            _ => Config::default(),
+        };
+
+        if let Some(general_raw) = raw.general {
+            apply_partial_general_raw(&mut cfg.general, general_raw);
+        }
 
         if let Some(b) = raw.border {
             match b {
-                BorderFieldHelper::Bool(en) => general.border = en,
+                BorderFieldHelper::Bool(en) => cfg.general.border = en,
                 BorderFieldHelper::Style(s) => {
-                    general.border = true;
-                    general.border_style = Some(s);
+                    cfg.general.border = true;
+                    cfg.general.border_style = Some(s);
                 }
-                BorderFieldHelper::Table(tbl) => apply_border_helper(&mut general, *tbl),
+                BorderFieldHelper::Table(tbl) => apply_border_helper(&mut cfg.general, *tbl),
             }
         }
 
         if let Some(bif) = raw.border_image {
-            apply_border_image_helper(&mut general, bif);
+            apply_border_image_helper(&mut cfg.general, bif);
         }
 
         if let Some(imgs) = raw.border_images {
-            general.border_images = imgs;
+            cfg.general.border_images = imgs;
         }
         if let Some(cols) = raw.colors {
-            general.colors = cols;
+            cfg.general.colors = cols;
         }
         if let Some(l) = raw.logo {
-            general.logo = l;
+            cfg.general.logo = l;
         }
 
         let (mut modules, table_gpu) = match raw.modules {
             Some(ModulesFieldHelper::List(list)) => (list, None),
-            Some(ModulesFieldHelper::Table(tbl)) => (
-                tbl.list.unwrap_or_else(|| Config::default().modules),
-                tbl.gpu,
-            ),
-            None => (Config::default().modules, None),
+            Some(ModulesFieldHelper::Table(tbl)) => {
+                (tbl.list.unwrap_or_else(|| cfg.modules.clone()), tbl.gpu)
+            }
+            None => (cfg.modules.clone(), None),
         };
 
         let raw_gpu = raw.gpu.or(table_gpu);
-        let gpu = match raw_gpu {
-            Some(GpuConfigHelper::Table(cfg)) => cfg,
+        cfg.gpu = match raw_gpu {
+            Some(GpuConfigHelper::Table(gpu_cfg)) => gpu_cfg,
             Some(GpuConfigHelper::TypeStr(s)) => GpuConfig { r#type: s },
             None => GpuConfig::default(),
         };
 
-        if gpu.r#type != "dgpu" {
+        if cfg.gpu.r#type != "dgpu" {
             for m in &mut modules {
                 if m.name == "gpu" && m.gpu_type.is_none() {
-                    m.gpu_type = Some(gpu.r#type.clone());
+                    m.gpu_type = Some(cfg.gpu.r#type.clone());
                 }
             }
         }
+        cfg.modules = modules;
 
-        Ok(Config {
-            general,
-            modules,
-            gpu,
-        })
+        normalize_config_values(&mut cfg, &mut warnings);
+        cfg.load_warnings = warnings;
+        Ok(cfg)
     }
 }
 
@@ -154,8 +194,7 @@ impl Default for ColorsConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BorderCharsConfig {
     pub top_left: String,
     pub top: String,
@@ -168,6 +207,78 @@ pub struct BorderCharsConfig {
     pub divider_left: String,
     pub divider: String,
     pub divider_right: String,
+}
+
+/// Table form of `border_chars` (kept for backwards compatibility).
+///
+/// Missing fields fall back to the rounded style, matching the historical
+/// table behaviour.
+#[derive(Deserialize)]
+#[serde(default)]
+struct BorderCharsTable {
+    top_left: String,
+    top: String,
+    top_right: String,
+    right: String,
+    bottom_right: String,
+    bottom: String,
+    bottom_left: String,
+    left: String,
+    divider_left: String,
+    divider: String,
+    divider_right: String,
+}
+
+impl Default for BorderCharsTable {
+    fn default() -> Self {
+        let base = BorderCharsConfig::default();
+        Self {
+            top_left: base.top_left,
+            top: base.top,
+            top_right: base.top_right,
+            right: base.right,
+            bottom_right: base.bottom_right,
+            bottom: base.bottom,
+            bottom_left: base.bottom_left,
+            left: base.left,
+            divider_left: base.divider_left,
+            divider: base.divider,
+            divider_right: base.divider_right,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BorderCharsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Helper {
+            Table(Box<BorderCharsTable>),
+            CompactString(String),
+        }
+
+        match Helper::deserialize(deserializer)? {
+            Helper::Table(t) => Ok(BorderCharsConfig {
+                top_left: t.top_left,
+                top: t.top,
+                top_right: t.top_right,
+                right: t.right,
+                bottom_right: t.bottom_right,
+                bottom: t.bottom,
+                bottom_left: t.bottom_left,
+                left: t.left,
+                divider_left: t.divider_left,
+                divider: t.divider,
+                divider_right: t.divider_right,
+            }),
+            Helper::CompactString(value) => {
+                BorderCharsConfig::from_chars_string(&value).map_err(serde::de::Error::custom)
+            }
+        }
+    }
 }
 
 impl Default for BorderCharsConfig {
@@ -201,6 +312,33 @@ impl BorderCharsConfig {
             divider: d.to_string(),
             divider_right: dr.to_string(),
         }
+    }
+
+    /// Builds border characters from an 11-character compact string such as
+    /// `"┌─┐│┘─└│├─┤"` (top-left, top, top-right, right, bottom-right,
+    /// bottom, bottom-left, left, divider-left, divider, divider-right).
+    pub fn from_chars_string(value: &str) -> Result<Self, String> {
+        let chars: Vec<char> = value.trim().chars().collect();
+        if chars.len() != 11 {
+            return Err(format!(
+                "border_chars compact string must contain exactly 11 characters (got {})",
+                chars.len()
+            ));
+        }
+        let s = |index: usize| chars[index].to_string();
+        Ok(Self {
+            top_left: s(0),
+            top: s(1),
+            top_right: s(2),
+            right: s(3),
+            bottom_right: s(4),
+            bottom: s(5),
+            bottom_left: s(6),
+            left: s(7),
+            divider_left: s(8),
+            divider: s(9),
+            divider_right: s(10),
+        })
     }
 }
 
@@ -784,6 +922,9 @@ pub struct ModuleConfig {
     pub bar: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bar_width: Option<usize>,
+    /// Progress-bar glyph style: "blocks" (default), "line", "dots", "ascii".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bar_style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -810,6 +951,8 @@ struct ModuleConfigTableHelper {
     format: Option<String>,
     bar: Option<bool>,
     bar_width: Option<usize>,
+    #[serde(alias = "bar-style")]
+    bar_style: Option<String>,
     #[serde(alias = "mount", alias = "mount_point")]
     path: Option<String>,
 }
@@ -875,6 +1018,7 @@ impl<'de> Deserialize<'de> for ModuleConfig {
                     format: t.format,
                     bar: t.bar,
                     bar_width: t.bar_width,
+                    bar_style: t.bar_style,
                     path: t.path,
                     gpu_type,
                 })
@@ -1076,6 +1220,465 @@ pub fn distro_icon(distro_name: &str) -> &'static str {
     }
 }
 
+/// Shading modes understood by the 3D renderer.
+pub const SHADING_MODES: &[&str] = &[
+    "ascii",
+    "blocks",
+    "sextants",
+    "braille",
+    "dot",
+    "wireframe",
+    "solid",
+];
+
+/// Progress-bar glyph styles understood by the layout engine.
+pub const BAR_STYLES: &[&str] = &["blocks", "line", "dots", "ascii"];
+
+/// Theme identifiers accepted by `rustfetch_render::get_theme`.
+///
+/// Kept here as a dependency-free copy (core must not depend on the render
+/// crate); `render/src/color.rs` is the authority and this list must be kept
+/// in sync with its canonical names and aliases.
+const KNOWN_THEMES: &[&str] = &[
+    "catppuccin-mocha",
+    "catppuccin",
+    "mocha",
+    "catppuccin-latte",
+    "latte",
+    "catppuccin-macchiato",
+    "macchiato",
+    "catppuccin-frappe",
+    "frappe",
+    "dracula",
+    "tokyo-night",
+    "tokyonight",
+    "gruvbox",
+    "gruvbox-dark",
+    "nord",
+    "rose-pine",
+    "rosepine",
+    "cyberpunk",
+    "monokai",
+    "onedark",
+    "one-dark",
+    "solarized-dark",
+    "solarized",
+];
+
+/// Returns true when `name` is a module identifier accepted by [`crate::modules::module_by_name`]
+/// (including the `disk:<mount>` form).
+pub fn is_known_module_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if let Some(mount) = trimmed.strip_prefix("disk:") {
+        return !mount.trim().is_empty();
+    }
+    crate::modules::module_names().contains(&trimmed)
+}
+
+/// Returns true when `name` is a supported 3D shading mode (case-insensitive).
+pub fn is_known_shading_mode(name: &str) -> bool {
+    SHADING_MODES.contains(&name.trim().to_lowercase().as_str())
+}
+
+/// Returns true when `name` is a supported progress-bar style (case-insensitive).
+pub fn is_known_bar_style(name: &str) -> bool {
+    BAR_STYLES.contains(&name.trim().to_lowercase().as_str())
+}
+
+/// Returns true when `name` resolves to a theme in the render crate.
+pub fn is_known_theme_name(name: &str) -> bool {
+    let normalized = name.trim().to_lowercase().replace('_', "-");
+    KNOWN_THEMES.contains(&normalized.as_str())
+}
+
+fn push_warning(warnings: &mut Vec<String>, message: String) {
+    if !warnings.contains(&message) {
+        warnings.push(message);
+    }
+}
+
+fn clamp_usize(value: &mut usize, min: usize, max: usize, path: &str, warnings: &mut Vec<String>) {
+    if *value < min {
+        push_warning(
+            warnings,
+            format!("{path} {value} is below the supported minimum {min}; clamped to {min}"),
+        );
+        *value = min;
+    } else if *value > max {
+        push_warning(
+            warnings,
+            format!("{path} {value} exceeds the supported maximum {max}; clamped to {max}"),
+        );
+        *value = max;
+    }
+}
+
+fn clamp_optional_usize(
+    value: &mut Option<usize>,
+    min: usize,
+    max: usize,
+    path: &str,
+    warnings: &mut Vec<String>,
+) {
+    if let Some(current) = value {
+        if *current < min {
+            push_warning(
+                warnings,
+                format!("{path} {current} is below the supported minimum {min}; clamped to {min}"),
+            );
+            *value = Some(min);
+        } else if *current > max {
+            push_warning(
+                warnings,
+                format!("{path} {current} exceeds the supported maximum {max}; clamped to {max}"),
+            );
+            *value = Some(max);
+        }
+    }
+}
+
+fn clamp_i32(value: &mut i32, min: i32, max: i32, path: &str, warnings: &mut Vec<String>) {
+    if *value < min {
+        push_warning(
+            warnings,
+            format!("{path} {value} is below the supported minimum {min}; clamped to {min}"),
+        );
+        *value = min;
+    } else if *value > max {
+        push_warning(
+            warnings,
+            format!("{path} {value} exceeds the supported maximum {max}; clamped to {max}"),
+        );
+        *value = max;
+    }
+}
+
+fn clamp_optional_i32(
+    value: &mut Option<i32>,
+    min: i32,
+    max: i32,
+    path: &str,
+    warnings: &mut Vec<String>,
+) {
+    if let Some(mut current) = *value {
+        clamp_i32(&mut current, min, max, path, warnings);
+        *value = Some(current);
+    }
+}
+
+fn clamp_f32(
+    value: &mut f32,
+    min: f32,
+    max: f32,
+    default: f32,
+    path: &str,
+    warnings: &mut Vec<String>,
+) {
+    if !value.is_finite() {
+        push_warning(
+            warnings,
+            format!("{path} is not a finite number; using the default {default}"),
+        );
+        *value = default;
+    } else if *value < min {
+        push_warning(
+            warnings,
+            format!("{path} {value} is below the supported minimum {min}; clamped to {min}"),
+        );
+        *value = min;
+    } else if *value > max {
+        push_warning(
+            warnings,
+            format!("{path} {value} exceeds the supported maximum {max}; clamped to {max}"),
+        );
+        *value = max;
+    }
+}
+
+fn clamp_f64(
+    value: &mut f64,
+    min: f64,
+    max: f64,
+    default: f64,
+    path: &str,
+    warnings: &mut Vec<String>,
+) {
+    if !value.is_finite() {
+        push_warning(
+            warnings,
+            format!("{path} is not a finite number; using the default {default}"),
+        );
+        *value = default;
+    } else if *value < min {
+        push_warning(
+            warnings,
+            format!("{path} {value} is below the supported minimum {min}; clamped to {min}"),
+        );
+        *value = min;
+    } else if *value > max {
+        push_warning(
+            warnings,
+            format!("{path} {value} exceeds the supported maximum {max}; clamped to {max}"),
+        );
+        *value = max;
+    }
+}
+
+/// Single place where loaded configuration values are normalized and bounded.
+///
+/// Every load path (TOML, salvage recovery, Fastfetch import) funnels through
+/// this function so no module ever sees a hostile value such as `padding = 99999`,
+/// a NaN float or an unknown `shading_mode`.
+fn normalize_config_values(cfg: &mut Config, warnings: &mut Vec<String>) {
+    clamp_usize(&mut cfg.general.padding, 0, 64, "general.padding", warnings);
+    clamp_usize(
+        &mut cfg.general.box_padding,
+        0,
+        16,
+        "general.box_padding",
+        warnings,
+    );
+    clamp_usize(
+        &mut cfg.general.colors.rows,
+        1,
+        2,
+        "general.colors.rows",
+        warnings,
+    );
+    clamp_usize(
+        &mut cfg.general.logo.image_width_cols,
+        1,
+        256,
+        "general.logo.image_width_cols",
+        warnings,
+    );
+
+    clamp_f32(
+        &mut cfg.general.logo.three_d.speed,
+        0.05,
+        10.0,
+        1.0,
+        "general.logo.three_d.speed",
+        warnings,
+    );
+    clamp_f32(
+        &mut cfg.general.logo.three_d.size,
+        0.1,
+        3.0,
+        1.0,
+        "general.logo.three_d.size",
+        warnings,
+    );
+    clamp_f32(
+        &mut cfg.general.logo.three_d.depth,
+        0.1,
+        5.0,
+        1.0,
+        "general.logo.three_d.depth",
+        warnings,
+    );
+    clamp_optional_usize(
+        &mut cfg.general.logo.three_d.width,
+        1,
+        512,
+        "general.logo.three_d.width",
+        warnings,
+    );
+    clamp_optional_usize(
+        &mut cfg.general.logo.three_d.height,
+        1,
+        512,
+        "general.logo.three_d.height",
+        warnings,
+    );
+    clamp_f64(
+        &mut cfg.general.logo.animation.fps,
+        1.0,
+        120.0,
+        15.0,
+        "general.logo.animation.fps",
+        warnings,
+    );
+
+    clamp_optional_usize(
+        &mut cfg.general.border_image_width,
+        1,
+        512,
+        "general.border_image_width",
+        warnings,
+    );
+    clamp_optional_usize(
+        &mut cfg.general.border_image_height,
+        1,
+        512,
+        "general.border_image_height",
+        warnings,
+    );
+    clamp_optional_i32(
+        &mut cfg.general.border_image_offset_x,
+        -10_000,
+        10_000,
+        "general.border_image_offset_x",
+        warnings,
+    );
+    clamp_optional_i32(
+        &mut cfg.general.border_image_offset_y,
+        -10_000,
+        10_000,
+        "general.border_image_offset_y",
+        warnings,
+    );
+    clamp_optional_i32(
+        &mut cfg.general.border_image_z_index,
+        -100,
+        100,
+        "general.border_image_z_index",
+        warnings,
+    );
+
+    for (index, image) in cfg.general.border_images.iter_mut().enumerate() {
+        let prefix = format!("general.border_images[{index}]");
+        clamp_optional_usize(
+            &mut image.width,
+            1,
+            512,
+            &format!("{prefix}.width"),
+            warnings,
+        );
+        clamp_optional_usize(
+            &mut image.height,
+            1,
+            512,
+            &format!("{prefix}.height"),
+            warnings,
+        );
+        clamp_optional_i32(
+            &mut image.offset_x,
+            -10_000,
+            10_000,
+            &format!("{prefix}.offset_x"),
+            warnings,
+        );
+        clamp_optional_i32(
+            &mut image.offset_y,
+            -10_000,
+            10_000,
+            &format!("{prefix}.offset_y"),
+            warnings,
+        );
+        clamp_i32(
+            &mut image.z_index,
+            -100,
+            100,
+            &format!("{prefix}.z_index"),
+            warnings,
+        );
+    }
+
+    for module in &mut cfg.modules {
+        if let Some(width) = &mut module.bar_width {
+            clamp_usize(
+                width,
+                1,
+                256,
+                &format!("module '{}'.bar_width", module.name),
+                warnings,
+            );
+        }
+        if let Some(style) = module.bar_style.take() {
+            let trimmed = style.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let normalized = trimmed.to_lowercase();
+            if is_known_bar_style(&normalized) {
+                module.bar_style = Some(normalized);
+            } else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "module '{}' has unknown bar_style '{}'; expected one of {}",
+                        module.name,
+                        trimmed,
+                        BAR_STYLES.join(", ")
+                    ),
+                );
+            }
+        }
+    }
+
+    let shading = cfg.general.logo.three_d.shading_mode.trim().to_lowercase();
+    if is_known_shading_mode(&shading) {
+        cfg.general.logo.three_d.shading_mode = shading;
+    } else {
+        push_warning(
+            warnings,
+            format!(
+                "unknown shading_mode '{}'; expected one of {}; using 'ascii'",
+                cfg.general.logo.three_d.shading_mode.trim(),
+                SHADING_MODES.join(", ")
+            ),
+        );
+        cfg.general.logo.three_d.shading_mode = "ascii".to_string();
+    }
+}
+
+/// Collects non-clamping diagnostics about the current configuration values.
+fn collect_config_warnings(cfg: &Config, warnings: &mut Vec<String>) {
+    for module in &cfg.modules {
+        let name = module.name.trim();
+        if name.is_empty() {
+            push_warning(
+                warnings,
+                "module entry without a name is ignored".to_string(),
+            );
+        } else if !is_known_module_name(name) {
+            push_warning(
+                warnings,
+                format!(
+                    "unknown module '{name}' is ignored; run `rustfetch --list-modules` for the supported names"
+                ),
+            );
+        }
+        if let Some(style) = &module.bar_style {
+            if !is_known_bar_style(style) {
+                push_warning(
+                    warnings,
+                    format!(
+                        "module '{name}' has unknown bar_style '{}'; expected one of {}",
+                        style.trim(),
+                        BAR_STYLES.join(", ")
+                    ),
+                );
+            }
+        }
+    }
+
+    if let Some(theme) = &cfg.general.theme {
+        let trimmed = theme.trim();
+        if !trimmed.is_empty() && !is_known_theme_name(trimmed) {
+            push_warning(
+                warnings,
+                format!("unknown theme '{trimmed}' (ignored by the renderer)"),
+            );
+        }
+    }
+
+    if !is_known_shading_mode(&cfg.general.logo.three_d.shading_mode) {
+        push_warning(
+            warnings,
+            format!(
+                "unknown shading_mode '{}'; expected one of {}",
+                cfg.general.logo.three_d.shading_mode.trim(),
+                SHADING_MODES.join(", ")
+            ),
+        );
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -1086,6 +1689,7 @@ impl Default for Config {
                 "locale",
             ]),
             gpu: GpuConfig::default(),
+            load_warnings: Vec::new(),
         }
     }
 }
@@ -1198,27 +1802,57 @@ impl Config {
         }
     }
 
-    pub fn config_path() -> PathBuf {
-        Self::config_path_from_env(|var| std::env::var(var).ok())
+    /// Base configuration directory: `$XDG_CONFIG_HOME` when set to a non-empty
+    /// value, otherwise `$HOME/.config`. No literal `~` is ever produced; when
+    /// neither variable is usable a relative `.config` directory is returned so
+    /// callers can still report a printable path.
+    pub fn config_dir() -> PathBuf {
+        Self::config_dir_from_env(|var| std::env::var(var).ok())
     }
 
-    fn config_path_from_env(get_env: impl Fn(&str) -> Option<String>) -> PathBuf {
+    fn config_dir_from_env(get_env: impl Fn(&str) -> Option<String>) -> PathBuf {
         if let Some(xdg) = get_env("XDG_CONFIG_HOME") {
             let trimmed = xdg.trim();
             if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("rustfetch").join("config.toml");
+                return PathBuf::from(trimmed);
             }
         }
         if let Some(home) = get_env("HOME") {
             let trimmed = home.trim();
             if !trimmed.is_empty() {
-                return PathBuf::from(trimmed)
-                    .join(".config")
-                    .join("rustfetch")
-                    .join("config.toml");
+                return PathBuf::from(trimmed).join(".config");
             }
         }
-        PathBuf::from("~/.config/rustfetch/config.toml")
+        PathBuf::from(".config")
+    }
+
+    pub fn config_path() -> PathBuf {
+        Self::config_dir().join("rustfetch").join("config.toml")
+    }
+
+    /// Diagnostics about this configuration: ignored/unknown keys and module
+    /// names, unknown presets/themes/shading modes/bar styles, and values that
+    /// were clamped while loading.
+    ///
+    /// An empty vector means the configuration is fully valid. This is the API
+    /// exposed to `rustfetch --doctor`; messages are plain text.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut warnings: Vec<String> = Vec::new();
+        for message in &self.load_warnings {
+            push_warning(&mut warnings, message.clone());
+        }
+        collect_config_warnings(self, &mut warnings);
+        warnings
+    }
+
+    /// Applies the centralized value normalization/bounds to a programmatically
+    /// built configuration (the load paths already do this automatically).
+    pub fn clamp(&mut self) {
+        let mut warnings = Vec::new();
+        normalize_config_values(self, &mut warnings);
+        for message in warnings {
+            push_warning(&mut self.load_warnings, message);
+        }
     }
 
     pub fn find_fastfetch_config() -> Option<PathBuf> {
@@ -1466,7 +2100,14 @@ impl Config {
             }
         }
 
-        recovered_any.then_some(cfg)
+        if recovered_any {
+            let mut warnings = Vec::new();
+            normalize_config_values(&mut cfg, &mut warnings);
+            cfg.load_warnings = warnings;
+            Some(cfg)
+        } else {
+            None
+        }
     }
 
     pub fn to_default_toml() -> String {
@@ -1963,6 +2604,9 @@ name = "locale"
 
         config.general.center = center_detected;
 
+        let mut warnings = Vec::new();
+        normalize_config_values(&mut config, &mut warnings);
+        config.load_warnings = warnings;
         Some(config)
     }
 }
@@ -2224,36 +2868,36 @@ separator = 12345
     }
 
     #[test]
-    fn test_config_path_precedence() {
-        let path1 = Config::config_path_from_env(|var| match var {
+    fn test_config_dir_precedence() {
+        let dir1 = Config::config_dir_from_env(|var| match var {
             "XDG_CONFIG_HOME" => Some("/custom/config".into()),
             "HOME" => Some("/home/user".into()),
             _ => None,
         });
-        assert_eq!(path1, PathBuf::from("/custom/config/rustfetch/config.toml"));
+        assert_eq!(dir1, PathBuf::from("/custom/config"));
 
-        let path2 = Config::config_path_from_env(|var| match var {
+        let dir2 = Config::config_dir_from_env(|var| match var {
             "XDG_CONFIG_HOME" => Some("   ".into()),
             "HOME" => Some("/home/user".into()),
             _ => None,
         });
-        assert_eq!(
-            path2,
-            PathBuf::from("/home/user/.config/rustfetch/config.toml")
-        );
+        assert_eq!(dir2, PathBuf::from("/home/user/.config"));
 
-        let path3 = Config::config_path_from_env(|var| match var {
+        let dir3 = Config::config_dir_from_env(|var| match var {
             "XDG_CONFIG_HOME" => None,
             "HOME" => Some("/home/user".into()),
             _ => None,
         });
-        assert_eq!(
-            path3,
-            PathBuf::from("/home/user/.config/rustfetch/config.toml")
-        );
+        assert_eq!(dir3, PathBuf::from("/home/user/.config"));
 
-        let path4 = Config::config_path_from_env(|_| None);
-        assert_eq!(path4, PathBuf::from("~/.config/rustfetch/config.toml"));
+        let dir4 = Config::config_dir_from_env(|_| None);
+        assert_eq!(dir4, PathBuf::from(".config"));
+        assert!(!dir4.to_string_lossy().contains('~'));
+
+        // config_path() must build on config_dir() and never emit a literal tilde.
+        let path = Config::config_path();
+        assert!(path.ends_with("rustfetch/config.toml"));
+        assert!(!path.to_string_lossy().contains('~'));
     }
 
     #[test]
@@ -2782,5 +3426,195 @@ separator = 12345
         assert_eq!(default_icon_for_module("gpu"), Some("󰢮"));
         assert_eq!(default_icon_for_module("dgpu"), Some("󰢮"));
         assert_eq!(default_icon_for_module("igpu"), Some("󰢮"));
+    }
+
+    #[test]
+    fn test_clamp_values_from_toml() {
+        let toml_str = r#"
+        [general]
+        padding = 999
+        box_padding = 99
+        border_image_width = 0
+        border_image_height = 4096
+        border_image_offset_x = -999999
+        border_image_z_index = 999
+
+        [general.colors]
+        rows = 9
+
+        [general.logo]
+        image_width_cols = 9999
+
+        [general.logo.three_d]
+        size = 9.0
+        speed = 0.001
+        depth = 99.0
+        width = 99999
+        height = 0
+
+        [general.logo.animation]
+        fps = 999.0
+
+        [[modules]]
+        name = "memory"
+        bar_width = 0
+        "#;
+        let cfg = Config::from_toml(toml_str).expect("valid TOML");
+        assert_eq!(cfg.general.padding, 64);
+        assert_eq!(cfg.general.box_padding, 16);
+        assert_eq!(cfg.general.colors.rows, 2);
+        assert_eq!(cfg.general.logo.image_width_cols, 256);
+        assert_eq!(cfg.general.logo.three_d.size, 3.0);
+        assert_eq!(cfg.general.logo.three_d.speed, 0.05);
+        assert_eq!(cfg.general.logo.three_d.depth, 5.0);
+        assert_eq!(cfg.general.logo.three_d.width, Some(512));
+        assert_eq!(cfg.general.logo.three_d.height, Some(1));
+        assert_eq!(cfg.general.logo.animation.fps, 120.0);
+        assert_eq!(cfg.general.border_image_width, Some(1));
+        assert_eq!(cfg.general.border_image_height, Some(512));
+        assert_eq!(cfg.general.border_image_offset_x, Some(-10_000));
+        assert_eq!(cfg.general.border_image_z_index, Some(100));
+        assert_eq!(cfg.modules[0].bar_width, Some(1));
+        let warnings = cfg.warnings();
+        assert!(warnings.iter().any(|w| w.contains("general.padding")));
+        assert!(warnings.iter().any(|w| w.contains("bar_width")));
+    }
+
+    #[test]
+    fn test_non_finite_floats_fall_back_to_defaults() {
+        let toml_str = r#"
+        [general.logo.three_d]
+        size = nan
+        speed = inf
+        "#;
+        let cfg = Config::from_toml(toml_str).expect("valid TOML");
+        assert_eq!(cfg.general.logo.three_d.size, 1.0);
+        assert_eq!(cfg.general.logo.three_d.speed, 1.0);
+        let warnings = cfg.warnings();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("general.logo.three_d.size") && w.contains("finite")));
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("general.logo.three_d.speed") && w.contains("finite")));
+    }
+
+    #[test]
+    fn test_shading_mode_and_bar_style_whitelists() {
+        let toml_str = r#"
+        [general.logo.three_d]
+        shading_mode = "hologram"
+
+        [[modules]]
+        name = "memory"
+        bar_style = "rainbow"
+
+        [[modules]]
+        name = "disk"
+        bar_style = "line"
+        "#;
+        let cfg = Config::from_toml(toml_str).expect("valid TOML");
+        assert_eq!(cfg.general.logo.three_d.shading_mode, "ascii");
+        assert_eq!(cfg.modules[0].bar_style, None);
+        assert_eq!(cfg.modules[1].bar_style.as_deref(), Some("line"));
+        let warnings = cfg.warnings();
+        assert!(warnings.iter().any(|w| w.contains("shading_mode")));
+        assert!(warnings.iter().any(|w| w.contains("bar_style")));
+    }
+
+    #[test]
+    fn test_border_chars_compact_string_and_table() {
+        let compact = "[general]\nborder_chars = \"┌─┐│┘─└│├─┤\"\n";
+        let cfg = Config::from_toml(compact).expect("compact border_chars must parse");
+        let chars = cfg.general.border_chars.expect("border_chars set");
+        assert_eq!(chars.top_left, "┌");
+        assert_eq!(chars.top_right, "┐");
+        assert_eq!(chars.bottom_right, "┘");
+        assert_eq!(chars.divider_right, "┤");
+
+        let table = r#"
+        [general.border_chars]
+        top_left = "X"
+        top = "y"
+        "#;
+        let cfg_table = Config::from_toml(table).expect("table border_chars must parse");
+        let chars_table = cfg_table.general.border_chars.expect("border_chars set");
+        assert_eq!(chars_table.top_left, "X");
+        assert_eq!(chars_table.divider_right, "┤");
+
+        let invalid = "[general]\nborder_chars = \"┌─┐\"\n";
+        assert!(Config::from_toml(invalid).is_err());
+    }
+
+    #[test]
+    fn test_preset_layering_and_unknown_preset() {
+        let toml_str = r#"
+        preset = "card"
+
+        [general]
+        padding = 3
+        separator = "!"
+        "#;
+        let cfg = Config::from_toml(toml_str).expect("valid TOML");
+        assert!(cfg.general.border);
+        assert!(cfg.general.center);
+        assert_eq!(cfg.general.padding, 3);
+        assert_eq!(cfg.general.separator, "!");
+        assert!(cfg.modules.iter().any(|m| m.name == "host"));
+        assert!(cfg.warnings().is_empty(), "warnings: {:?}", cfg.warnings());
+
+        let unknown = "preset = \"neon-void\"\n";
+        let cfg_unknown = Config::from_toml(unknown).expect("valid TOML");
+        assert!(cfg_unknown.warnings().iter().any(|w| w.contains("preset")));
+        assert_eq!(cfg_unknown.modules, Config::default().modules);
+    }
+
+    #[test]
+    fn test_unknown_top_level_key_warns() {
+        let toml_str = r#"
+        unknown_thing = 1
+
+        [general]
+        padding = 1
+        "#;
+        let cfg = Config::from_toml(toml_str).expect("unknown keys must not fail parsing");
+        let warnings = cfg.warnings();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("unknown top-level key 'unknown_thing'")));
+    }
+
+    #[test]
+    fn test_unknown_module_and_theme_warnings() {
+        let toml_str = r#"
+        [general]
+        theme = "neon-void"
+
+        [[modules]]
+        name = "not_a_module"
+
+        [[modules]]
+        name = "disk:/home"
+        "#;
+        let cfg = Config::from_toml(toml_str).expect("valid TOML");
+        let warnings = cfg.warnings();
+        assert!(warnings.iter().any(|w| w.contains("not_a_module")));
+        assert!(warnings.iter().any(|w| w.contains("neon-void")));
+        assert!(is_known_module_name("disk:/home"));
+        assert!(is_known_theme_name("tokyonight"));
+        assert!(is_known_theme_name("rose_pine"));
+        assert!(!is_known_theme_name("definitely-not-a-theme"));
+    }
+
+    #[test]
+    fn test_default_config_has_no_warnings_and_public_clamp() {
+        let mut cfg = Config::default();
+        assert!(cfg.warnings().is_empty(), "warnings: {:?}", cfg.warnings());
+        cfg.general.padding = 1000;
+        cfg.general.logo.three_d.shading_mode = "bogus".to_string();
+        cfg.clamp();
+        assert_eq!(cfg.general.padding, 64);
+        assert_eq!(cfg.general.logo.three_d.shading_mode, "ascii");
+        assert!(!cfg.warnings().is_empty());
     }
 }

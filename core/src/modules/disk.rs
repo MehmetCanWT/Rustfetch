@@ -7,6 +7,14 @@ pub struct Disk {
     pub mount_point: Option<String>,
 }
 
+/// Filesystem capacity information in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskStats {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub avail_bytes: u64,
+}
+
 impl Default for Disk {
     fn default() -> Self {
         Self::new()
@@ -34,35 +42,54 @@ impl Module for Disk {
         if let Some(mount) = &self.mount_point {
             let trimmed = mount.trim();
             if !trimmed.is_empty() && trimmed != "/" {
-                let (total, free) = get_disk_usage(trimmed)?;
-                let value = format_disk_usage(total, free)?;
+                let value = disk_value_for(trimmed)?;
                 return Some(Info::new(format!("Disk ({trimmed})"), value));
             }
         }
-        let value = read_disk()?;
-        Some(Info::new("Disk (/)", value))
+        let (label, value) = read_disk_with_label()?;
+        Some(Info::new(label, value))
     }
+}
+
+fn disk_value_for(path: &str) -> Option<String> {
+    format_disk_stats(get_disk_stats(path)?)
+}
+
+/// Formats filesystem usage using the same formula as df: the denominator is
+/// used + available-for-unprivileged-users (not the raw block count).
+pub fn format_disk_stats(stats: DiskStats) -> Option<String> {
+    if stats.total_bytes == 0 || stats.avail_bytes > stats.total_bytes {
+        return None;
+    }
+
+    let used_bytes = stats.used_bytes.min(stats.total_bytes);
+    let gib = 1024.0 * 1024.0 * 1024.0;
+    let used_gib = used_bytes as f64 / gib;
+    let total_gib = stats.total_bytes as f64 / gib;
+    let denominator = used_bytes.saturating_add(stats.avail_bytes);
+    let pct = if denominator == 0 {
+        0
+    } else {
+        (used_bytes as f64 / denominator as f64 * 100.0).round() as u64
+    };
+
+    Some(format!("{used_gib:.1} GiB / {total_gib:.1} GiB ({pct}%)"))
 }
 
 pub fn format_disk_usage(total_bytes: u64, free_bytes: u64) -> Option<String> {
     if total_bytes == 0 || free_bytes > total_bytes {
         return None;
     }
-
     let used_bytes = total_bytes - free_bytes;
-    let gib = 1024.0 * 1024.0 * 1024.0;
-    let used_gib = used_bytes as f64 / gib;
-    let total_gib = total_bytes as f64 / gib;
-    let pct = (used_bytes as f64 / total_bytes as f64 * 100.0).round() as u64;
-
-    Some(format!("{used_gib:.1} GiB / {total_gib:.1} GiB ({pct}%)"))
+    format_disk_stats(DiskStats {
+        total_bytes,
+        used_bytes,
+        avail_bytes: free_bytes,
+    })
 }
 
-/// Query the filesystem using `libc::statvfs` for the given path.
-///
-/// Returns `Some((total_bytes, free_bytes))` on success, or `None` if `statvfs` fails
-/// or if block sizes/calculations are invalid.
-pub fn get_disk_usage(path: &str) -> Option<(u64, u64)> {
+/// Queries the filesystem using libc::statvfs for the given path.
+pub fn get_disk_stats(path: &str) -> Option<DiskStats> {
     let c_path = CString::new(path).ok()?;
     let mut stat = MaybeUninit::<libc::statvfs>::zeroed();
 
@@ -84,74 +111,106 @@ pub fn get_disk_usage(path: &str) -> Option<(u64, u64)> {
 
     let total_bytes = stat.f_blocks.checked_mul(block_size)?;
     let free_bytes = stat.f_bfree.checked_mul(block_size)?;
+    let avail_bytes = stat.f_bavail.checked_mul(block_size)?;
+    if free_bytes > total_bytes || avail_bytes > total_bytes {
+        return None;
+    }
 
-    Some((total_bytes, free_bytes))
+    Some(DiskStats {
+        total_bytes,
+        used_bytes: total_bytes - free_bytes,
+        avail_bytes,
+    })
 }
 
-/// Reads and formats disk usage for the root filesystem (`/`),
-/// falling back to `/sysroot` or `/var` on immutable ostree/composefs systems (e.g. Bazzite, Silverblue)
-/// where `/` is a tiny read-only composefs mount (< 1 GiB).
-pub fn read_disk() -> Option<String> {
+/// Legacy helper returning (total, free) for callers that only need two values.
+pub fn get_disk_usage(path: &str) -> Option<(u64, u64)> {
+    let stats = get_disk_stats(path)?;
+    Some((stats.total_bytes, stats.total_bytes - stats.used_bytes))
+}
+
+/// Reads disk usage for the root filesystem, falling back to /sysroot or /var
+/// on immutable ostree/composefs systems where / is a tiny read-only mount.
+pub fn read_disk_with_label() -> Option<(String, String)> {
+    read_disk_from(get_disk_stats)
+}
+
+/// Testable variant of read_disk_with_label: the stat provider is injected.
+pub fn read_disk_from<F>(mut stat: F) -> Option<(String, String)>
+where
+    F: FnMut(&str) -> Option<DiskStats>,
+{
     let one_gib = 1024 * 1024 * 1024;
-    let (mut total_bytes, mut free_bytes) = get_disk_usage("/")?;
-    if total_bytes < one_gib {
+    let mut chosen = "/";
+    let mut stats = stat("/")?;
+    if stats.total_bytes < one_gib {
         for fallback in ["/sysroot", "/var"] {
-            if let Some((t, f)) = get_disk_usage(fallback) {
-                if t >= one_gib {
-                    total_bytes = t;
-                    free_bytes = f;
+            if let Some(candidate) = stat(fallback) {
+                if candidate.total_bytes >= one_gib {
+                    chosen = fallback;
+                    stats = candidate;
                     break;
                 }
             }
         }
     }
-    format_disk_usage(total_bytes, free_bytes)
+    let value = format_disk_stats(stats)?;
+    let label = if chosen == "/" {
+        "Disk (/)".to_string()
+    } else {
+        format!("Disk ({chosen})")
+    };
+    Some((label, value))
+}
+
+pub fn read_disk() -> Option<String> {
+    read_disk_with_label().map(|(_, value)| value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn stats(total_bytes: u64, used_bytes: u64, avail_bytes: u64) -> DiskStats {
+        DiskStats {
+            total_bytes,
+            used_bytes,
+            avail_bytes,
+        }
+    }
+
     #[test]
     fn test_format_disk_usage_prompt_example() {
-        // 45.2 GiB used / 237.9 GiB total (19%)
         let total_bytes = 255_443_180_052;
         let used_bytes = 48_533_130_445;
         let free_bytes = total_bytes - used_bytes;
-
-        let formatted = format_disk_usage(total_bytes, free_bytes);
-        assert_eq!(formatted, Some("45.2 GiB / 237.9 GiB (19%)".to_string()));
+        assert_eq!(
+            format_disk_usage(total_bytes, free_bytes),
+            Some("45.2 GiB / 237.9 GiB (19%)".to_string())
+        );
     }
 
     #[test]
     fn test_format_disk_usage_fedora_workstation() {
-        // Realistic Fedora Linux installation fixture: 512 GB SSD with ~476.8 GiB usable
-        // e.g. 105.4 GiB used out of 476.8 GiB (22%)
         let gib = 1024 * 1024 * 1024;
         let total_bytes = (476.8 * gib as f64).round() as u64;
         let used_bytes = (105.4 * gib as f64).round() as u64;
         let free_bytes = total_bytes - used_bytes;
-
-        let result = format_disk_usage(total_bytes, free_bytes);
-        assert_eq!(result, Some("105.4 GiB / 476.8 GiB (22%)".to_string()));
+        assert_eq!(
+            format_disk_usage(total_bytes, free_bytes),
+            Some("105.4 GiB / 476.8 GiB (22%)".to_string())
+        );
     }
 
     #[test]
     fn test_format_disk_usage_edge_cases() {
-        // Zero total bytes should return None
         assert_eq!(format_disk_usage(0, 0), None);
-
-        // Free bytes > total bytes should return None
         assert_eq!(format_disk_usage(100, 200), None);
-
-        // 0% used
         let gib = 1024 * 1024 * 1024;
         assert_eq!(
             format_disk_usage(100 * gib, 100 * gib),
             Some("0.0 GiB / 100.0 GiB (0%)".to_string())
         );
-
-        // 100% used
         assert_eq!(
             format_disk_usage(100 * gib, 0),
             Some("100.0 GiB / 100.0 GiB (100%)".to_string())
@@ -159,15 +218,63 @@ mod tests {
     }
 
     #[test]
+    fn test_format_disk_stats_uses_df_denominator() {
+        let gib = 1024 * 1024 * 1024;
+        // 90 GiB used, 5 GiB reserved but available to root only -> df says 90/95.
+        let df = format_disk_stats(stats(100 * gib, 90 * gib, 5 * gib)).unwrap();
+        assert!(
+            df.ends_with("(95%)"),
+            "unexpected df-style percentage: {df}"
+        );
+    }
+
+    #[test]
+    fn test_read_disk_from_labels_sysroot_fallback() {
+        let gib = 1024 * 1024 * 1024;
+        let provider = |path: &str| match path {
+            "/" => Some(stats(gib / 4, gib / 8, gib / 8)),
+            "/sysroot" => Some(stats(100 * gib, 60 * gib, 30 * gib)),
+            _ => None,
+        };
+        let (label, value) = read_disk_from(provider).unwrap();
+        assert_eq!(label, "Disk (/sysroot)");
+        assert!(value.contains("100.0 GiB"));
+    }
+
+    #[test]
+    fn test_read_disk_from_keeps_root_label_for_normal_systems() {
+        let gib = 1024 * 1024 * 1024;
+        let (label, _) = read_disk_from(|path: &str| match path {
+            "/" => Some(stats(500 * gib, 100 * gib, 400 * gib)),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(label, "Disk (/)");
+    }
+
+    #[test]
+    fn test_read_disk_from_var_fallback() {
+        let gib = 1024 * 1024 * 1024;
+        let (label, _) = read_disk_from(|path: &str| match path {
+            "/" => Some(stats(gib / 2, 0, gib / 2)),
+            "/var" => Some(stats(10 * gib, gib, 9 * gib)),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(label, "Disk (/var)");
+    }
+
+    #[test]
     fn test_statvfs_and_detect_live() {
         let usage = get_disk_usage("/");
-        assert!(
-            usage.is_some(),
-            "get_disk_usage('/') should succeed on Linux"
-        );
+        assert!(usage.is_some(), "get_disk_usage('/') should succeed");
         let (total, free) = usage.unwrap();
         assert!(total > 0);
         assert!(total >= free);
+
+        let stats = get_disk_stats("/").unwrap();
+        assert!(stats.avail_bytes <= stats.total_bytes);
+        assert!(stats.used_bytes + stats.avail_bytes <= stats.total_bytes);
 
         let module = Disk::new();
         assert_eq!(module.name(), "disk");
@@ -186,7 +293,13 @@ mod tests {
 
     #[test]
     fn test_statvfs_nonexistent_path() {
-        let usage = get_disk_usage("/nonexistent_path_for_rustfetch_test_12345");
-        assert_eq!(usage, None);
+        assert_eq!(
+            get_disk_usage("/nonexistent_path_for_rustfetch_test_12345"),
+            None
+        );
+        assert_eq!(
+            get_disk_stats("/nonexistent_path_for_rustfetch_test_12345"),
+            None
+        );
     }
 }

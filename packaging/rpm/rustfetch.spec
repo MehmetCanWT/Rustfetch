@@ -1,5 +1,5 @@
 Name:           rustfetch
-Version:        0.1.2
+Version:        0.1.5
 Release:        1%{?dist}
 Summary:        A blazing-fast, memory-safe system fetch tool written in Rust
 
@@ -8,7 +8,7 @@ URL:            https://github.com/MehmetCanWT/rustfetch
 Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
 BuildRequires:  cargo
-BuildRequires:  rust >= 1.70.0
+BuildRequires:  rust >= 1.88.0
 BuildRequires:  gcc
 
 %description
@@ -21,10 +21,10 @@ without spawning shell sub-processes.
 %autosetup -n %{name}-%{version}
 
 %build
-cargo build --release -p rustfetch
+cargo build --release --locked -p rustfetch
 
 %check
-cargo test --release --all
+cargo test --release --workspace --locked
 
 %install
 # Binary
@@ -63,5 +63,14 @@ ln -sf rustfetch.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/rfetch.f
 %{_datadir}/fish/vendor_completions.d/rfetch.fish
 
 %changelog
+* Fri Nov 06 2026 Mehmet Can <https://github.com/MehmetCanWT> - 0.1.5-1
+- Sync with upstream v0.1.5 "Ragdoll"
+- Zero-alloc ANSI parser, synchronized output, hardened shell hooks & tools
+
+* Fri Nov 06 2026 Mehmet Can <https://github.com/MehmetCanWT> - 0.1.4-1
+- Sync with upstream v0.1.4 "Siamese"
+- Declare MSRV rust >= 1.88.0 (requires image 0.25.x)
+- Run the full workspace test suite (--release --workspace --locked) in %check
+
 * Wed Sep 30 2026 Mehmet Can <https://github.com/MehmetCanWT> - 0.1.0-1
 - Initial release of RustFetch
