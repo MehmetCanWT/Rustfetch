@@ -1,4 +1,4 @@
-use crate::proc::{run_with_timeout, OPTIONAL_SOURCE_TIMEOUT};
+use crate::proc::{OPTIONAL_SOURCE_TIMEOUT, run_with_timeout};
 use crate::{Info, Module};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,10 +50,10 @@ fn collect_sysfs_hid_devices(root: &Path, devices: &mut Vec<String>) {
         }
         // A HID power supply under a USB path is a wired / USB-receiver
         // peripheral, not a Bluetooth device.
-        if let Ok(canonical) = fs::canonicalize(&path) {
-            if !is_bluetooth_sysfs_path(&canonical.to_string_lossy()) {
-                continue;
-            }
+        if let Ok(canonical) = fs::canonicalize(&path)
+            && !is_bluetooth_sysfs_path(&canonical.to_string_lossy())
+        {
+            continue;
         }
         let model = read_trimmed(&path.join("model_name"))
             .filter(|model| !model.is_empty())
@@ -100,11 +100,14 @@ pub fn is_hid_power_supply(name: &str) -> bool {
     name.starts_with("hid-") || name.starts_with("hidpp")
 }
 
-/// A HID battery is Bluetooth only when it does not live under a USB path.
+/// A HID battery is Bluetooth when located on a Bluetooth bus/UHID (`0005:`) and not under USB/I2C.
 pub fn is_bluetooth_sysfs_path(canonical_path: &str) -> bool {
+    if canonical_path.contains("/bluetooth/") || canonical_path.contains("0005:") {
+        return true;
+    }
     !canonical_path
         .split(['/', '\\'])
-        .any(|segment| segment == "usb" || segment.starts_with("usb"))
+        .any(|segment| segment == "usb" || segment.starts_with("usb") || segment.starts_with("i2c"))
 }
 
 pub fn parse_bluetoothctl_device_line(line: &str) -> Option<(String, String)> {
@@ -125,12 +128,11 @@ pub fn parse_bluetoothctl_info_battery(output: &str) -> Option<u8> {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("Battery Percentage:") {
             let rest = rest.trim();
-            if let Some((_, after_open)) = rest.split_once('(') {
-                if let Some((inner, _)) = after_open.split_once(')') {
-                    if let Ok(pct) = inner.trim().parse::<u8>() {
-                        return Some(pct.min(100));
-                    }
-                }
+            if let Some((_, after_open)) = rest.split_once('(')
+                && let Some((inner, _)) = after_open.split_once(')')
+                && let Ok(pct) = inner.trim().parse::<u8>()
+            {
+                return Some(pct.min(100));
             }
             let cleaned = rest.trim_end_matches('%').trim();
             if let Ok(pct) = cleaned.parse::<u8>() {

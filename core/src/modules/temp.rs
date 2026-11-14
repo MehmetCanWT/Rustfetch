@@ -51,7 +51,8 @@ fn collect_hwmon_candidates(root: &Path, out: &mut Vec<(u8, String, i32)>) {
             .unwrap_or_default()
             .to_ascii_lowercase();
         let chip_rank = match chip.as_str() {
-            "coretemp" | "k10temp" | "zenpower" | "cpu_thermal" | "soc_thermal" => 0u8,
+            "coretemp" | "k10temp" | "zenpower" | "zenpower3" | "fam15h_power" | "x86_pkg_temp"
+            | "cpu_thermal" | "soc_thermal" | "thinkpad" | "apple_smc" | "raspberrypi_hwmon" => 0u8,
             "nvme" => 4,
             _ => continue,
         };
@@ -92,10 +93,8 @@ fn collect_hwmon_candidates(root: &Path, out: &mut Vec<(u8, String, i32)>) {
 
         // Some drivers expose no labels at all; temp1_input is then the package
         // (or the only) sensor.
-        if !saw_label {
-            if let Some(temp) = read_temp_file(&dir.join("temp1_input")) {
-                out.push((chip_rank + 2, format!("{chip}:unlabelled:temp1"), temp));
-            }
+        if !saw_label && let Some(temp) = read_temp_file(&dir.join("temp1_input")) {
+            out.push((chip_rank + 2, format!("{chip}:unlabelled:temp1"), temp));
         }
     }
 }

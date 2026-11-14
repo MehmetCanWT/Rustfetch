@@ -15,17 +15,17 @@ impl Module for FontModule {
             env_value("HOME").as_deref(),
         )?;
 
-        if let Ok(content) = fs::read_to_string(config_dir.join("kdeglobals")) {
-            if let Some(font) = parse_kde_font(&content) {
-                return Some(Info::new("Font", font));
-            }
+        if let Ok(content) = fs::read_to_string(config_dir.join("kdeglobals"))
+            && let Some(font) = parse_kde_font(&content)
+        {
+            return Some(Info::new("Font", font));
         }
 
         for gtk_ver in ["gtk-4.0", "gtk-3.0"] {
-            if let Ok(content) = fs::read_to_string(config_dir.join(gtk_ver).join("settings.ini")) {
-                if let Some(font) = parse_gtk_font(&content) {
-                    return Some(Info::new("Font", format!("{font} [GTK]")));
-                }
+            if let Ok(content) = fs::read_to_string(config_dir.join(gtk_ver).join("settings.ini"))
+                && let Some(font) = parse_gtk_font(&content)
+            {
+                return Some(Info::new("Font", format!("{font} [GTK]")));
             }
         }
 

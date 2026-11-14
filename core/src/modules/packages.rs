@@ -1,5 +1,5 @@
-use crate::proc::{run_with_timeout, PACKAGE_TOOL_TIMEOUT};
-use crate::{cache::Cache, Info, Module};
+use crate::proc::{PACKAGE_TOOL_TIMEOUT, run_with_timeout};
+use crate::{Info, Module, cache::Cache};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,10 +44,8 @@ impl Module for PackagesModule {
             push_count(&mut packages, count, "rpm");
             rpm_counted = true;
         }
-        if !rpm_counted {
-            if let Some(count) = count_rpm_fallback() {
-                push_count(&mut packages, count, "rpm");
-            }
+        if !rpm_counted && let Some(count) = count_rpm_fallback() {
+            push_count(&mut packages, count, "rpm");
         }
 
         let dpkg_count = std::fs::read_to_string("/var/lib/dpkg/status")
@@ -65,10 +63,10 @@ impl Module for PackagesModule {
             push_count(&mut packages, count_apk_packages(&apk_str), "apk");
         }
 
-        if let Some(xbps_path) = find_xbps_database(Path::new("/var/db/xbps")) {
-            if let Ok(xbps_str) = std::fs::read_to_string(xbps_path) {
-                push_count(&mut packages, count_xbps_packages(&xbps_str), "xbps");
-            }
+        if let Some(xbps_path) = find_xbps_database(Path::new("/var/db/xbps"))
+            && let Ok(xbps_str) = std::fs::read_to_string(xbps_path)
+        {
+            push_count(&mut packages, count_xbps_packages(&xbps_str), "xbps");
         }
 
         push_count(
@@ -154,9 +152,19 @@ pub fn count_pacman_packages(local_dir: &Path) -> usize {
 /// Counts installed packages from the dpkg status database ("Package:" stanzas).
 pub fn count_dpkg_packages(status: &str) -> usize {
     status
-        .lines()
-        .filter(|line| line.starts_with("Package:"))
-        .filter(|line| !line["Package:".len()..].trim().is_empty())
+        .split("\n\n")
+        .filter(|stanza| {
+            let mut has_package = false;
+            let mut installed = true;
+            for line in stanza.lines() {
+                if let Some(pkg) = line.strip_prefix("Package:") {
+                    has_package = !pkg.trim().is_empty();
+                } else if let Some(st) = line.strip_prefix("Status:") {
+                    installed = st.trim().ends_with(" installed");
+                }
+            }
+            has_package && installed
+        })
         .count()
 }
 
@@ -211,11 +219,15 @@ pub fn count_nix_packages_in(bin_dirs: &[PathBuf]) -> usize {
             continue;
         };
         for entry in entries.flatten() {
-            let resolved = fs::read_link(entry.path()).or_else(|_| fs::canonicalize(entry.path()));
-            let Ok(target) = resolved else {
-                continue;
-            };
-            if let Some(package) = nix_store_package(&target) {
+            let package = fs::read_link(entry.path())
+                .ok()
+                .and_then(|target| nix_store_package(&target))
+                .or_else(|| {
+                    fs::canonicalize(entry.path())
+                        .ok()
+                        .and_then(|target| nix_store_package(&target))
+                });
+            if let Some(package) = package {
                 packages.insert(package);
             }
         }
@@ -388,8 +400,8 @@ fn count_rpm_sqlite() -> Option<usize> {
 
         let mut count: Option<usize> = None;
         for sql in [
-            c"SELECT count(*) FROM Packages".as_ptr(),
             c"SELECT count(*) FROM Sigmd5".as_ptr(),
+            c"SELECT count(*) FROM Packages".as_ptr(),
         ] {
             let mut stmt: *mut libc::c_void = std::ptr::null_mut();
             if fn_prep(db, sql, -1, &mut stmt, std::ptr::null_mut()) == SQLITE_OK && !stmt.is_null()
@@ -429,18 +441,16 @@ where
             .map(|d| format!("{}:{}", d.as_secs(), d.subsec_nanos()))
     });
 
-    if let (Some(ref stamp), Some(cached)) = (&mtime_stamp, cache.read_stale()) {
-        if let Some((cached_stamp, count_str)) = cached.trim().split_once(' ') {
-            if cached_stamp == stamp {
-                if let Ok(count) = count_str.parse::<usize>() {
-                    return Some(count);
-                }
-            }
-        }
+    if let (Some(stamp), Some(cached)) = (mtime_stamp.as_deref(), cache.read_stale())
+        && let Some((cached_stamp, count_str)) = cached.trim().split_once(' ')
+        && cached_stamp == stamp
+        && let Ok(count) = count_str.parse::<usize>()
+    {
+        return Some(count);
     }
 
     let count = exec_rpm()?;
-    if let Some(ref stamp) = mtime_stamp {
+    if let Some(stamp) = &mtime_stamp {
         cache.write(&format!("{stamp} {count}"));
     }
     Some(count)

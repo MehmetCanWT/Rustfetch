@@ -1,4 +1,4 @@
-use crate::{cache::Cache, Info, Module};
+use crate::{Info, Module, cache::Cache};
 use std::fs;
 use std::time::Duration;
 
@@ -73,10 +73,10 @@ pub fn format_gpu_devices(devices: &[PciGpuDevice]) -> Vec<String> {
             parts.push(format!("[{vram}]"));
         }
 
-        if dev.gpu_type == "Discrete" {
-            if let Some(status) = detect_runtime_status(&dev.slot) {
-                parts.push(format!("[{status}]"));
-            }
+        if dev.gpu_type == "Discrete"
+            && let Some(status) = detect_runtime_status(&dev.slot)
+        {
+            parts.push(format!("[{status}]"));
         }
 
         gpus.push(parts.join(" "));
@@ -170,21 +170,20 @@ pub fn canonicalize_pci_slot(slot: &str) -> String {
 
 fn get_or_cache_static_gpus() -> Option<Vec<PciGpuDevice>> {
     let cache = Cache::new("gpu");
-    if let Some(cached_val) = cache.read(Duration::from_secs(24 * 3600)) {
-        if let Some(devices) = parse_static_gpu_cache(&cached_val) {
-            if !devices.is_empty() {
-                // If sysfs PCI devices directory exists, verify all cached slots are still present.
-                // If a GPU was detached/unbinded (e.g. Thunderbolt eGPU unplugged), invalidate cache.
-                let pci_dir = std::path::Path::new("/sys/bus/pci/devices");
-                let all_present = !pci_dir.exists()
-                    || devices.iter().all(|d| {
-                        let slot = canonicalize_pci_slot(&d.slot);
-                        pci_dir.join(&slot).exists()
-                    });
-                if all_present {
-                    return Some(devices);
-                }
-            }
+    if let Some(cached_val) = cache.read(Duration::from_secs(24 * 3600))
+        && let Some(devices) = parse_static_gpu_cache(&cached_val)
+        && !devices.is_empty()
+    {
+        // If sysfs PCI devices directory exists, verify all cached slots are still present.
+        // If a GPU was detached/unbinded (e.g. Thunderbolt eGPU unplugged), invalidate cache.
+        let pci_dir = std::path::Path::new("/sys/bus/pci/devices");
+        let all_present = !pci_dir.exists()
+            || devices.iter().all(|d| {
+                let slot = canonicalize_pci_slot(&d.slot);
+                pci_dir.join(&slot).exists()
+            });
+        if all_present {
+            return Some(devices);
         }
     }
 
@@ -311,6 +310,16 @@ pub fn is_amd_apu_name(name_lower: &str) -> bool {
         || name_lower.contains("phoenix")
         || name_lower.contains("hawk point")
         || name_lower.contains("strix")
+        || name_lower.contains("strix halo")
+        || name_lower.contains("krackan")
+        || name_lower.contains("raphael")
+        || name_lower.contains("granite ridge")
+        || name_lower.contains("dragon range")
+        || name_lower.contains("fire range")
+        || name_lower.contains("yellow carp")
+        || name_lower.contains("green sardine")
+        || name_lower.contains("cyan skillfish")
+        || name_lower.contains("vangogh")
         || name_lower.contains("lucienne")
         || name_lower.contains("mendocino")
         || name_lower.contains("raven ridge")
@@ -389,12 +398,11 @@ pub fn detect_vram_bytes(slot: &str) -> Option<u64> {
     let direct_pci = std::path::Path::new("/sys/bus/pci/devices")
         .join(&canon_slot)
         .join("mem_info_vram_total");
-    if let Ok(bytes_str) = fs::read_to_string(&direct_pci) {
-        if let Ok(bytes) = bytes_str.trim().parse::<u64>() {
-            if bytes > 0 {
-                return Some(bytes);
-            }
-        }
+    if let Ok(bytes_str) = fs::read_to_string(&direct_pci)
+        && let Ok(bytes) = bytes_str.trim().parse::<u64>()
+        && bytes > 0
+    {
+        return Some(bytes);
     }
 
     // 2. Via DRM cards: /sys/class/drm/card*/device/mem_info_vram_total
@@ -419,12 +427,11 @@ pub fn detect_vram_bytes(slot: &str) -> Option<u64> {
                     .unwrap_or(false);
                 if matches_slot {
                     let vram_path = dev_link.join("mem_info_vram_total");
-                    if let Ok(bytes_str) = fs::read_to_string(&vram_path) {
-                        if let Ok(bytes) = bytes_str.trim().parse::<u64>() {
-                            if bytes > 0 {
-                                return Some(bytes);
-                            }
-                        }
+                    if let Ok(bytes_str) = fs::read_to_string(&vram_path)
+                        && let Ok(bytes) = bytes_str.trim().parse::<u64>()
+                        && bytes > 0
+                    {
+                        return Some(bytes);
                     }
                 }
             }
@@ -519,12 +526,19 @@ pub fn scan_pci_gpus() -> Vec<PciGpuDevice> {
     }
 
     if devices.is_empty() {
-        let output = std::process::Command::new("lspci")
-            .arg("-D")
-            .output()
-            .or_else(|_| std::process::Command::new("lspci").output());
-        if let Ok(output) = output {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        let output =
+            crate::proc::run_with_timeout("lspci", &["-D"], crate::proc::OPTIONAL_SOURCE_TIMEOUT)
+                .filter(|out| out.success())
+                .or_else(|| {
+                    crate::proc::run_with_timeout(
+                        "lspci",
+                        &[],
+                        crate::proc::OPTIONAL_SOURCE_TIMEOUT,
+                    )
+                    .filter(|out| out.success())
+                });
+        if let Some(output) = output {
+            let stdout = output.stdout_string();
             for line in stdout.lines() {
                 if let Some((prefix, rest)) = line.split_once(": ") {
                     let mut prefix_parts = prefix.split_whitespace();
@@ -555,14 +569,15 @@ pub fn scan_pci_gpus() -> Vec<PciGpuDevice> {
 }
 
 fn lookup_pci_slot_lspci(slot: &str) -> Option<String> {
-    let output = std::process::Command::new("lspci")
-        .args(["-s", slot])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let output = crate::proc::run_with_timeout(
+        "lspci",
+        &["-s", slot],
+        crate::proc::OPTIONAL_SOURCE_TIMEOUT,
+    )?;
+    if !output.success() {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = output.stdout_string();
     let line = stdout.lines().next()?;
     let (_, rest) = line.split_once(": ")?;
     Some(clean_lspci_gpu_name(rest))
@@ -584,14 +599,14 @@ pub fn clean_lspci_gpu_name(raw: &str) -> String {
         ""
     };
 
-    if let (Some(start), Some(end)) = (s.rfind('['), s.rfind(']')) {
-        if start < end {
-            let inside = s[start + 1..end].trim();
-            if !vendor.is_empty() && !inside.starts_with(vendor) {
-                return format!("{vendor} {inside}");
-            } else {
-                return inside.to_string();
-            }
+    if let (Some(start), Some(end)) = (s.rfind('['), s.rfind(']'))
+        && start < end
+    {
+        let inside = s[start + 1..end].trim();
+        if !vendor.is_empty() && !inside.starts_with(vendor) {
+            return format!("{vendor} {inside}");
+        } else {
+            return inside.to_string();
         }
     }
 
@@ -638,11 +653,7 @@ fn lookup_pci_in_content(content: &str, vendor_id: &str, device_id: &str) -> Opt
                 let dev_name = line[4..].trim();
                 let dev_clean = if let (Some(s), Some(e)) = (dev_name.find('['), dev_name.find(']'))
                 {
-                    if s < e {
-                        &dev_name[s + 1..e]
-                    } else {
-                        dev_name
-                    }
+                    if s < e { &dev_name[s + 1..e] } else { dev_name }
                 } else {
                     dev_name
                 };

@@ -178,14 +178,27 @@ if LC_ALL=C grep -q $'\r' "$TMP_DIR/pipe-output.txt"; then
     fail "piped output must not contain CRLF line endings"
 fi
 
-note "$BIN update notification check"
+note "$BIN update notification and --self-update / --update checks"
 UPDATE_OUTPUT="$TMP_DIR/update-output.txt"
-RUSTFETCH_LATEST_VERSION="9.9.9" "$BIN" --no-logo > "$UPDATE_OUTPUT"
+COLUMNS=120 RUSTFETCH_LATEST_VERSION="9.9.9" "$BIN" --no-logo > "$UPDATE_OUTPUT"
 assert_contains 'Update available' "$UPDATE_OUTPUT"
+assert_contains 'rustfetch --self-update' "$UPDATE_OUTPUT"
 
 NO_UPDATE_OUTPUT="$TMP_DIR/no-update-output.txt"
 RUSTFETCH_LATEST_VERSION="9.9.9" "$BIN" --no-logo --no-update-check > "$NO_UPDATE_OUTPUT"
 assert_not_contains 'Update available' "$NO_UPDATE_OUTPUT"
+
+"$BIN" --help > "$TMP_DIR/help.txt"
+assert_contains '--self-update' "$TMP_DIR/help.txt"
+assert_contains '--update' "$TMP_DIR/help.txt"
+
+mkdir -p "$XDG_CONFIG_HOME/rustfetch"
+printf '# keep user config\n[general]\npadding = 4\n' > "$XDG_CONFIG_HOME/rustfetch/config.toml"
+RUSTFETCH_LATEST_VERSION="0.1.0" "$BIN" --self-update > "$TMP_DIR/self-update.txt"
+assert_contains 'already up to date' "$TMP_DIR/self-update.txt"
+RUSTFETCH_LATEST_VERSION="0.1.0" "$BIN" --update > "$TMP_DIR/update-alias.txt"
+assert_contains 'already up to date' "$TMP_DIR/update-alias.txt"
+assert_contains '# keep user config' "$XDG_CONFIG_HOME/rustfetch/config.toml"
 
 note "$BIN discovery, doctor, and cat mascot checks"
 "$BIN" --list-modules > "$TMP_DIR/list-modules.txt"

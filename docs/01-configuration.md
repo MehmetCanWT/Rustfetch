@@ -95,7 +95,7 @@ divider_right = "┤"
 
 [general.border_image]
 # path = "~/.config/rustfetch/background.png"
-position = "behind"        # "behind", "background", "left", "right", "top", "bottom"
+position = "behind"        # "behind", "background", "bg", "left", "right", "top", "bottom", "frame"
 # width = 30
 # height = 18
 # offset_x = 0
@@ -117,7 +117,7 @@ enabled = true             # Display logo/graphic
 # ASCII logos; with an image those requests warn on stderr and fall back to "left".
 position = "left"
 distro = "auto"            # "auto" detects host OS, or override ("arch", "fedora", "ubuntu", etc.)
-protocol = "auto"          # Image protocol: "auto", "kitty", "sixel", "iterm", "halfblock"
+protocol = "auto"          # Image protocol: "auto", "kitty", "sixel", "iterm", "braille", "halfblock"
 image_width_cols = 42      # Width of graphic column in terminal cells (1..=256)
 auto_color = true          # Adapt accent colors to image dominant color
 
@@ -173,12 +173,14 @@ CLI flags always take precedence over configuration file settings:
       --no-logo                Disable the logo completely
   -l, --logo <DISTRO>          Override the distro logo (see --list-logos)
       --logo-position <POS>    ASCII: left/right/top/bottom/behind; image: left/top/behind
-  -i, --image <PATH>           Render an image logo (Kitty/Sixel/iTerm2/halfblock)
-      --protocol <PROTOCOL>    Image protocol: auto, kitty, sixel, iterm, halfblock
+  -i, --image <PATH>           Render an image logo (Kitty/Sixel/iTerm2/Braille/halfblock)
+      --protocol <PROTOCOL>    Image protocol: auto, kitty, sixel, iterm, braille, halfblock
       --width <COLS>           Image / 3D canvas width in terminal columns
       --height <ROWS>          Image / 3D canvas height in terminal rows
       --3d                     Real-time 3D animated logo
       --speed <FLOAT>          3D rotation speed (0.05..=10)
+      --rotate-x               Rotate the 3D model around the X axis
+      --rotate-y               Rotate the 3D model around the Y axis
       --size <FLOAT>           3D model scale (0.1..=3.0)
       --depth <FLOAT>          3D relief depth (0.1..=5)
       --shading-mode <MODE>    3D shading: ascii, blocks, sextants, braille, dot, wireframe, solid
@@ -196,8 +198,15 @@ CLI flags always take precedence over configuration file settings:
       --border-color <COLOR>   Border color (name or #hex)
       --border-title <TITLE>   Title embedded in the top border line
       --border-image <PATH>    Decorative image border/frame
-      --border-image-width <N> Border image width in columns
-      --border-image-position <POSITION>  behind/background, left, right, top, bottom, frame
+      --border-image-width <N> Border image width in columns (1..=512)
+      --border-image-height <N>          Border image height in rows (1..=512)
+      --border-image-offset-x <COLS>     Horizontal offset for background border image
+      --border-image-offset-y <ROWS>     Vertical offset for background border image
+      --border-image-z-index <INDEX>     Border image stacking z-index (when text_on_top is false)
+      --border-image-position <POSITION> behind/background, left, right, top, bottom, frame
+      --border-image-protocol <PROTOCOL> Border image graphics protocol: auto, kitty, halfblock
+      --border-image-preserve-aspect-ratio <BOOL> Preserve border image aspect ratio
+      --border-image-text-on-top <BOOL>  Draw card text on top of background border image
       --json                   Output structured JSON telemetry
       --waybar                 Output Waybar/Polybar single-line JSON
       --format <FORMAT>        Output format (waybar, json)
@@ -207,7 +216,7 @@ CLI flags always take precedence over configuration file settings:
       --generate-config        Write the default config.toml (keeps a .bak)
       --import-fastfetch       Import an existing Fastfetch configuration
       --install-hook           Install the shell startup/resize hook
-      --remove-hook            Remove the shell startup/resize hook
+      --uninstall-hook, --remove-hook    Remove the shell startup/resize hook
       --init <SHELL>           Print the init snippet (bash, zsh, fish)
       --completions <SHELL>    Print a completion script (bash, zsh, fish, elvish, powershell)
       --list-modules           List all 39 modules
@@ -217,6 +226,6 @@ CLI flags always take precedence over configuration file settings:
       --clean-cache            Clear ~/.cache/rustfetch
       --doctor                 System, graphics, and config diagnostics
       --no-update-check        Skip the GitHub update check
-      --self-update            Update in place from GitHub releases
+      --self-update, --update  Update in place via install.sh (preserves config.toml)
       --setup, --tui           Interactive configuration wizard
 ```

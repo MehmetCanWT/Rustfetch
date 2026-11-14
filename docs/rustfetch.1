@@ -88,7 +88,7 @@ Placement of the logo. ASCII logos support \fIleft\fR, \fIright\fR, \fItop\fR,
 falls back to \fIleft\fR.
 .TP
 .BR \-\-protocol " \fIPROTOCOL\fR"
-Image protocol: \fIauto\fR, \fIkitty\fR, \fIsixel\fR, \fIiterm\fR, or \fIhalfblock\fR.
+Image protocol: \fIauto\fR, \fIkitty\fR, \fIsixel\fR, \fIiterm\fR, \fIbraille\fR, or \fIhalfblock\fR.
 .TP
 .BR \-\-width " \fICOLS\fR"
 Image or 3D canvas width in terminal columns.
@@ -116,11 +116,32 @@ Title embedded in the top border line.
 Use an image file as a decorative border/frame.
 .TP
 .BR \-\-border\-image\-width " \fICOLS\fR"
-Column width of the border image.
+Column width of the border image (1 to 512).
+.TP
+.BR \-\-border\-image\-height " \fIROWS\fR"
+Row height of the border image (1 to 512).
+.TP
+.BR \-\-border\-image\-offset\-x " \fICOLS\fR"
+Horizontal offset in columns for a background border image.
+.TP
+.BR \-\-border\-image\-offset\-y " \fIROWS\fR"
+Vertical offset in rows for a background border image.
+.TP
+.BR \-\-border\-image\-z\-index " \fIINDEX\fR"
+Border image stacking z-index (when text_on_top is false).
 .TP
 .BR \-\-border\-image\-position " \fIPOSITION\fR"
 Border image placement: \fIbehind\fR/\fIbackground\fR, \fIleft\fR, \fIright\fR,
 \fItop\fR, \fIbottom\fR, or \fIframe\fR.
+.TP
+.BR \-\-border\-image\-protocol " \fIPROTOCOL\fR"
+Border image graphics protocol: \fIauto\fR, \fIkitty\fR, or \fIhalfblock\fR.
+.TP
+.BR \-\-border\-image\-preserve\-aspect\-ratio " \fIBOOL\fR"
+Preserve border image aspect ratio (\fItrue\fR or \fIfalse\fR).
+.TP
+.BR \-\-border\-image\-text\-on\-top " \fIBOOL\fR"
+Draw card text on top of a background border image (\fItrue\fR or \fIfalse\fR).
 .SS 3D engine and ASCII animation
 .TP
 .BR \-\-3d
@@ -128,6 +149,12 @@ Enable the real-time 3D animated logo.
 .TP
 .BR \-\-speed " \fIFLOAT\fR"
 3D rotation speed (0.05 to 10).
+.TP
+.BR \-\-rotate\-x
+Rotate the 3D model around the X axis.
+.TP
+.BR \-\-rotate\-y
+Rotate the 3D model around the Y axis.
 .TP
 .BR \-\-size " \fIFLOAT\fR"
 3D model scale (0.1 to 3.0).
@@ -194,8 +221,10 @@ Run system, terminal graphics, config validity/warning, cache, and update diagno
 .BR \-\-no\-update\-check
 Skip the GitHub update check for this run (\fB\-\-doctor \-\-no\-update\-check\fR is fully offline).
 .TP
-.BR \-\-self\-update
-Update RustFetch in place from the latest GitHub release while preserving \fIconfig.toml\fR.
+.BR \-\-self\-update ", " \-\-update
+Update RustFetch in place via the official one\-line installer
+(\fBinstall.sh\fR), checking both GitHub Releases and upstream \fImain\fR
+\fICargo.toml\fR while preserving \fIconfig.toml\fR.
 .TP
 .BR \-\-setup ", " \-\-tui
 Launch the interactive configuration wizard.
@@ -206,7 +235,7 @@ Print the shell startup/resize init snippet for \fIbash\fR, \fIzsh\fR, or \fIfis
 .BR \-\-install\-hook
 Install the shell startup/resize hook as a marked block in the shell rc file.
 .TP
-.BR \-\-remove\-hook
+.BR \-\-uninstall\-hook ", " \-\-remove\-hook
 Remove the marked RustFetch hook block from the shell rc file.
 .TP
 .BR \-\-completions " \fISHELL\fR"

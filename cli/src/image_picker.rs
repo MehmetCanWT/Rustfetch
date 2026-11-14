@@ -11,11 +11,11 @@ pub fn tilde_expand(path: &str) -> std::borrow::Cow<'_, str> {
         if let Ok(home) = std::env::var("HOME") {
             return std::borrow::Cow::Owned(home);
         }
-    } else if let Some(stripped) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            let home_trimmed = home.trim_end_matches('/');
-            return std::borrow::Cow::Owned(format!("{home_trimmed}/{stripped}"));
-        }
+    } else if let Some(stripped) = path.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        let home_trimmed = home.trim_end_matches('/');
+        return std::borrow::Cow::Owned(format!("{home_trimmed}/{stripped}"));
     }
     std::borrow::Cow::Borrowed(path)
 }
@@ -91,10 +91,10 @@ fn random_index(len: usize) -> usize {
         return 0;
     }
     let mut bytes = [0u8; 8];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        if file.read_exact(&mut bytes).is_ok() {
-            return (u64::from_le_bytes(bytes) % len as u64) as usize;
-        }
+    if let Ok(mut file) = std::fs::File::open("/dev/urandom")
+        && file.read_exact(&mut bytes).is_ok()
+    {
+        return (u64::from_le_bytes(bytes) % len as u64) as usize;
     }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -140,10 +140,8 @@ pub fn pick_random_image(dir_path: &str, keep_last: bool) -> Option<String> {
             .file_type()
             .map(|ft| ft.is_file() || (ft.is_symlink() && entry.path().is_file()))
             .unwrap_or(false);
-        if is_file {
-            if let Some(s) = entry.path().to_str() {
-                files.push(s.to_string());
-            }
+        if is_file && let Some(s) = entry.path().to_str() {
+            files.push(s.to_string());
         }
     }
     if files.is_empty() {
@@ -163,25 +161,23 @@ pub fn pick_random_image(dir_path: &str, keep_last: bool) -> Option<String> {
         })
         .unwrap_or_default();
 
-    if recent.is_empty() {
-        if let Ok(last) = fs::read_to_string(&last_logo_file) {
-            let trimmed = last.trim();
-            if !trimmed.is_empty() {
-                recent.push(trimmed.to_string());
-            }
+    if recent.is_empty()
+        && let Ok(last) = fs::read_to_string(&last_logo_file)
+    {
+        let trimmed = last.trim();
+        if !trimmed.is_empty() {
+            recent.push(trimmed.to_string());
         }
     }
 
-    if keep_last {
-        if let Some(first) = recent.first() {
-            let first_name = std::path::Path::new(first).file_name();
-            if let Some(matched) = files.iter().find(|f| {
-                f.as_str() == first.as_str()
-                    || (first_name.is_some()
-                        && std::path::Path::new(f.as_str()).file_name() == first_name)
-            }) {
-                return Some(matched.clone());
-            }
+    if keep_last && let Some(first) = recent.first() {
+        let first_name = std::path::Path::new(first).file_name();
+        if let Some(matched) = files.iter().find(|f| {
+            f.as_str() == first.as_str()
+                || (first_name.is_some()
+                    && std::path::Path::new(f.as_str()).file_name() == first_name)
+        }) {
+            return Some(matched.clone());
         }
     }
 
@@ -287,15 +283,15 @@ fn format_sidecar(meta: &SidecarMeta, sidecar: &ColorSidecar) -> String {
         output.push('\n');
         output.push_str(dominant);
     }
-    if let Some(palette) = &sidecar.palette {
-        if !palette.is_empty() {
-            output.push('\n');
-            let entries: Vec<String> = palette
-                .iter()
-                .map(|(r, g, b)| format!("#{r:02x}{g:02x}{b:02x}"))
-                .collect();
-            output.push_str(&entries.join(","));
-        }
+    if let Some(palette) = &sidecar.palette
+        && !palette.is_empty()
+    {
+        output.push('\n');
+        let entries: Vec<String> = palette
+            .iter()
+            .map(|(r, g, b)| format!("#{r:02x}{g:02x}{b:02x}"))
+            .collect();
+        output.push_str(&entries.join(","));
     }
     output
 }
@@ -361,22 +357,21 @@ pub fn get_image_color_and_palette(
     let path = Path::new(image_path);
     let cached = read_valid_sidecar(path);
 
-    if auto_color && cached.dominant.is_none() || want_palette && cached.palette.is_none() {
-        if let Some((dominant, palette)) =
+    if (auto_color && cached.dominant.is_none() || want_palette && cached.palette.is_none())
+        && let Some((dominant, palette)) =
             rustfetch_render::extract_dominant_and_palette(image_path, 16)
-        {
-            let final_dominant = cached.dominant.clone().unwrap_or(dominant);
-            let final_palette = cached.palette.clone().or(palette);
-            write_sidecar(path, &final_dominant, final_palette.as_ref());
-            return (
-                if auto_color {
-                    Some(final_dominant)
-                } else {
-                    None
-                },
-                if want_palette { final_palette } else { None },
-            );
-        }
+    {
+        let final_dominant = cached.dominant.clone().unwrap_or(dominant);
+        let final_palette = cached.palette.clone().or(palette);
+        write_sidecar(path, &final_dominant, final_palette.as_ref());
+        return (
+            if auto_color {
+                Some(final_dominant)
+            } else {
+                None
+            },
+            if want_palette { final_palette } else { None },
+        );
     }
 
     (

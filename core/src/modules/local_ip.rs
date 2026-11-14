@@ -47,14 +47,13 @@ fn fib_lookup_ipv4() -> Option<String> {
             "10.255.255.255:53",
             "192.168.255.255:53",
         ] {
-            if socket.connect(target).is_ok() {
-                if let Ok(addr) = socket.local_addr() {
-                    if let std::net::IpAddr::V4(ip) = addr.ip() {
-                        if !ip.is_loopback() && !ip.is_unspecified() {
-                            return Some(ip.to_string());
-                        }
-                    }
-                }
+            if socket.connect(target).is_ok()
+                && let Ok(addr) = socket.local_addr()
+                && let std::net::IpAddr::V4(ip) = addr.ip()
+                && !ip.is_loopback()
+                && !ip.is_unspecified()
+            {
+                return Some(ip.to_string());
             }
         }
     }
@@ -102,10 +101,10 @@ fn interface_ipv4_fallback(preferred_iface: Option<&str>) -> Option<String> {
         libc::freeifaddrs(ifaddrs);
 
         found.sort();
-        if let Some(preferred) = preferred_iface {
-            if let Some((_, ip)) = found.iter().find(|(name, _)| name == preferred) {
-                return Some(ip.clone());
-            }
+        if let Some(preferred) = preferred_iface
+            && let Some((_, ip)) = found.iter().find(|(name, _)| name == preferred)
+        {
+            return Some(ip.clone());
         }
         found.into_iter().next().map(|(_, ip)| ip)
     }

@@ -21,17 +21,37 @@ Thumbs.db
 
 # Internal Agent & Planning state
 PLAN.md
+PROJECT.md
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+TODO.md
+NOTES.md
 DETAYLI_KOD_ANALIZI.md
 PROJECT_MAP.md
 MODULES.md
 CHANGELOG.md
 PONYTAIL-DEBT.md
 .agents/
+.claude/
+.codex/
+.gemini/
+.cursor/
+.caveman/
+.cocoindex_code/
+.context-mode/
 skills-lock.json
 
-# Local scratch, test files, and experimental assets
+# Local scratch, ad-hoc test scripts, and research assets
 scratch/
 research/
+notes/
+tmp/
+test-*.sh
+bench-*.sh
+debug-*.sh
+!scripts/test.sh
+!scripts/test-cli.sh
 
 # Logs, patches, dumps and temporary outputs
 *.log

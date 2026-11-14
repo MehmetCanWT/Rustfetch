@@ -1,5 +1,5 @@
 use crate::modules::net_io::{is_virtual_interface, parse_default_route_interface};
-use crate::proc::{run_with_timeout, OPTIONAL_SOURCE_TIMEOUT};
+use crate::proc::{OPTIONAL_SOURCE_TIMEOUT, run_with_timeout};
 use crate::{Info, Module};
 use std::fs;
 use std::path::Path;
@@ -64,12 +64,11 @@ pub fn get_wifi_details_from(net_root: &Path, route_path: &Path) -> Option<WifiD
     let iface = find_wireless_interface_from(net_root, route_iface.as_deref())?;
 
     if let Some(output) = run_with_timeout("iw", &["dev", &iface, "link"], OPTIONAL_SOURCE_TIMEOUT)
+        && output.success()
     {
-        if output.success() {
-            let text = output.stdout_string();
-            if let Some(details) = parse_iw_link_details(&text) {
-                return Some(details);
-            }
+        let text = output.stdout_string();
+        if let Some(details) = parse_iw_link_details(&text) {
+            return Some(details);
         }
     }
 
@@ -86,26 +85,25 @@ pub fn get_wifi_details_from(net_root: &Path, route_path: &Path) -> Option<WifiD
             "no",
         ],
         OPTIONAL_SOURCE_TIMEOUT,
-    ) {
-        if output.success() {
-            let text = output.stdout_string();
-            if let Some(details) = parse_nmcli_dev_wifi(&text) {
-                return Some(details);
-            }
+    ) && output.success()
+    {
+        let text = output.stdout_string();
+        if let Some(details) = parse_nmcli_dev_wifi(&text) {
+            return Some(details);
         }
     }
 
-    if let Some(output) = run_with_timeout("iwgetid", &["-r", &iface], OPTIONAL_SOURCE_TIMEOUT) {
-        if output.success() {
-            let ssid = output.stdout_string().trim().to_string();
-            if !ssid.is_empty() {
-                return Some(WifiDetails {
-                    ssid,
-                    signal_pct: None,
-                    dbm: None,
-                    band: None,
-                });
-            }
+    if let Some(output) = run_with_timeout("iwgetid", &["-r", &iface], OPTIONAL_SOURCE_TIMEOUT)
+        && output.success()
+    {
+        let ssid = output.stdout_string().trim().to_string();
+        if !ssid.is_empty() {
+            return Some(WifiDetails {
+                ssid,
+                signal_pct: None,
+                dbm: None,
+                band: None,
+            });
         }
     }
 
@@ -148,10 +146,10 @@ pub fn find_wireless_interface_from(net_root: &Path, preferred: Option<&str>) ->
     up.sort();
     all.sort();
 
-    if let Some(pref) = preferred {
-        if up.iter().any(|name| name == pref) || all.iter().any(|name| name == pref) {
-            return Some(pref.to_string());
-        }
+    if let Some(pref) = preferred
+        && (up.iter().any(|name| name == pref) || all.iter().any(|name| name == pref))
+    {
+        return Some(pref.to_string());
     }
 
     up.into_iter().next().or_else(|| all.into_iter().next())
@@ -193,7 +191,7 @@ pub fn parse_iw_link_details(text: &str) -> Option<WifiDetails> {
                 .and_then(|s| s.parse::<i32>().ok())
             {
                 // Standard dBm to percentage mapping: -50 dBm is 100%, -100 dBm is 0%
-                signal_pct = Some((2 * (dbm + 100)).clamp(0, 100) as u8);
+                signal_pct = Some(dbm.saturating_add(100).saturating_mul(2).clamp(0, 100) as u8);
                 dbm_val = Some(dbm);
             }
         } else if let Some(rest) = trimmed.strip_prefix("freq:") {

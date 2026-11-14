@@ -172,10 +172,10 @@ pub fn parse_default_route_interface(content: &str) -> Option<String> {
         if destination != "00000000" {
             continue;
         }
-        if let Ok(flags) = u32::from_str_radix(fields[3], 16) {
-            if flags & 0x1 != 0 {
-                return Some(iface.to_string());
-            }
+        if let Ok(flags) = u32::from_str_radix(fields[3], 16)
+            && flags & 0x1 != 0
+        {
+            return Some(iface.to_string());
         }
     }
     None
@@ -225,15 +225,19 @@ pub fn select_interface(net_root: &Path, route_content: Option<&str>) -> Option<
         return None;
     }
 
-    if let Some(route) = route_iface {
-        if let Some((_, found)) = candidates.iter().find(|(_, bytes)| bytes.iface == route) {
-            return Some(found.clone());
-        }
+    if let Some(route) = route_iface
+        && let Some((_, found)) = candidates.iter().find(|(_, bytes)| bytes.iface == route)
+    {
+        return Some(found.clone());
     }
 
     candidates.sort_by(|a, b| {
         b.0.cmp(&a.0)
-            .then_with(|| (b.1.rx + b.1.tx).cmp(&(a.1.rx + a.1.tx)))
+            .then_with(|| {
+                b.1.rx
+                    .saturating_add(b.1.tx)
+                    .cmp(&a.1.rx.saturating_add(a.1.tx))
+            })
             .then_with(|| a.1.iface.cmp(&b.1.iface))
     });
     candidates.into_iter().next().map(|(_, bytes)| bytes)

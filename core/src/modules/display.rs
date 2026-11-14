@@ -151,10 +151,10 @@ pub fn parse_edid(data: &[u8]) -> Option<EdidTiming> {
 
     for slot in DTD_SLOTS {
         let end = slot + DTD_LEN;
-        if end <= EDID_BLOCK_LEN {
-            if let Some(timing) = parse_dtd(&data[slot..end]) {
-                return Some(timing);
-            }
+        if end <= EDID_BLOCK_LEN
+            && let Some(timing) = parse_dtd(&data[slot..end])
+        {
+            return Some(timing);
         }
     }
 

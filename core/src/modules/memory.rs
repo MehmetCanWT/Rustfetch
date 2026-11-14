@@ -31,14 +31,13 @@ pub fn read_zfs_arc_kb_from(path: &Path) -> u64 {
     };
     for line in arc_content.lines() {
         let mut parts = line.split_whitespace();
-        if parts.next() == Some("size") {
-            if let Some(arc_kb) = parts
+        if parts.next() == Some("size")
+            && let Some(arc_kb) = parts
                 .nth(1)
                 .and_then(|v| v.parse::<u64>().ok())
                 .map(|b| b / 1024)
-            {
-                return arc_kb;
-            }
+        {
+            return arc_kb;
         }
     }
     0
@@ -108,7 +107,6 @@ pub fn parse_meminfo_with_arc(content: &str, zfs_arc_kb: u64) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_snapshot;
 
     /// Realistic Fedora Linux /proc/meminfo fixture.
     const FEDORA_MEMINFO: &str = r#"MemTotal:       16252928 kB
@@ -146,7 +144,7 @@ SecPageTables:      2056 kB
     #[test]
     fn test_parse_meminfo_fedora() {
         let result = parse_meminfo(FEDORA_MEMINFO);
-        assert_snapshot!(result.unwrap(), @"3.2 GiB / 15.5 GiB");
+        assert_eq!(result.as_deref(), Some("3.2 GiB / 15.5 GiB"));
     }
 
     #[test]

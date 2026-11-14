@@ -12,6 +12,3 @@ libc = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
-
-[dev-dependencies]
-insta = "1.48.0"

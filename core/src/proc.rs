@@ -35,10 +35,18 @@ impl CapturedOutput {
     }
 }
 
+const MAX_CAPTURE_BYTES: u64 = 1024 * 1024;
+
 /// Spawns `command` with piped stdout/stderr and kills it after `timeout`.
 ///
 /// Returns `None` only when the process could not be spawned at all.
 pub fn run_capture_with_timeout(mut command: Command, timeout: Duration) -> Option<CapturedOutput> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -46,17 +54,17 @@ pub fn run_capture_with_timeout(mut command: Command, timeout: Duration) -> Opti
         .spawn()
         .ok()?;
 
-    let mut stdout_pipe = child.stdout.take()?;
-    let mut stderr_pipe = child.stderr.take()?;
+    let stdout_pipe = child.stdout.take()?;
+    let stderr_pipe = child.stderr.take()?;
 
     let stdout_reader = std::thread::spawn(move || {
         let mut buffer = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buffer);
+        let _ = stdout_pipe.take(MAX_CAPTURE_BYTES).read_to_end(&mut buffer);
         buffer
     });
     let stderr_reader = std::thread::spawn(move || {
         let mut buffer = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buffer);
+        let _ = stderr_pipe.take(MAX_CAPTURE_BYTES).read_to_end(&mut buffer);
         buffer
     });
 
@@ -73,6 +81,15 @@ pub fn run_capture_with_timeout(mut command: Command, timeout: Duration) -> Opti
             Ok(None) => {
                 if Instant::now() >= deadline {
                     timed_out = true;
+                    #[cfg(unix)]
+                    {
+                        let pgid = child.id() as libc::pid_t;
+                        if pgid > 0 {
+                            unsafe {
+                                libc::kill(-pgid, libc::SIGKILL);
+                            }
+                        }
+                    }
                     let _ = child.kill();
                     status = child.wait().ok();
                     break;
@@ -161,11 +178,13 @@ mod tests {
 
     #[test]
     fn missing_program_returns_none() {
-        assert!(run_with_timeout(
-            "definitely-not-a-real-program-rustfetch-test",
-            &[],
-            Duration::from_millis(100)
-        )
-        .is_none());
+        assert!(
+            run_with_timeout(
+                "definitely-not-a-real-program-rustfetch-test",
+                &[],
+                Duration::from_millis(100)
+            )
+            .is_none()
+        );
     }
 }

@@ -94,7 +94,7 @@ SwapFree:              0 kB
         assert_eq!(parse_swap(""), None);
         assert_eq!(parse_swap("SwapTotal: 8388608 kB"), None); // missing SwapFree
         assert_eq!(parse_swap("SwapFree: 7340032 kB"), None); // missing SwapTotal
-                                                              // SwapFree > SwapTotal safely returns None without panicking
+        // SwapFree > SwapTotal safely returns None without panicking
         let invalid = "SwapTotal: 1000 kB\nSwapFree: 2000 kB\n";
         assert_eq!(parse_swap(invalid), None);
     }

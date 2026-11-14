@@ -87,14 +87,13 @@ pub fn detect_os_birth_timestamp() -> Option<u64> {
         "/var/lib/dbus/machine-id",
         "/etc/os-release",
     ] {
-        if let Ok(meta) = std::fs::metadata(fallback) {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(dur) = modified.duration_since(UNIX_EPOCH) {
-                    let secs = dur.as_secs();
-                    if secs > 946_684_800 {
-                        fallback_candidates.push(secs);
-                    }
-                }
+        if let Ok(meta) = std::fs::metadata(fallback)
+            && let Ok(modified) = meta.modified()
+            && let Ok(dur) = modified.duration_since(UNIX_EPOCH)
+        {
+            let secs = dur.as_secs();
+            if secs > 946_684_800 {
+                fallback_candidates.push(secs);
             }
         }
     }

@@ -126,27 +126,28 @@ pub fn all_modules() -> Vec<Box<dyn Module>> {
 }
 
 pub fn module_from_config(mc: &crate::config::ModuleConfig) -> Option<Box<dyn Module>> {
-    if mc.name == "disk" {
-        if let Some(p) = &mc.path {
-            if !p.trim().is_empty() {
-                return Some(Box::new(disk::Disk::with_mount(p.trim())));
-            }
-        }
+    let name = mc.name.trim();
+    if name == "disk"
+        && let Some(p) = &mc.path
+        && !p.trim().is_empty()
+    {
+        return Some(Box::new(disk::Disk::with_mount(p.trim())));
     }
-    if mc.name == "gpu" {
+    if name == "gpu" {
         let filter = mc.gpu_type.as_deref().unwrap_or("dgpu");
         return Some(Box::new(gpu::GpuModule::with_type(filter)));
     }
-    if mc.name == "dgpu" {
+    if name == "dgpu" {
         return Some(Box::new(gpu::DgpuModule));
     }
-    if mc.name == "igpu" {
+    if name == "igpu" {
         return Some(Box::new(gpu::IgpuModule));
     }
-    module_by_name(&mc.name)
+    module_by_name(name)
 }
 
 pub fn module_by_name(name: &str) -> Option<Box<dyn Module>> {
+    let name = name.trim();
     if let Some(mount) = name.strip_prefix("disk:") {
         let m = mount.trim();
         if !m.is_empty() {
@@ -191,7 +192,7 @@ pub fn module_by_name(name: &str) -> Option<Box<dyn Module>> {
         "container" | "vm" => Some(Box::new(container::Container)),
         "update" => Some(Box::new(update::Update)),
         "custom" => Some(Box::new(custom::Custom)),
-        "break" | "divider" => Some(Box::new(BreakLine)),
+        "break" | "divider" | "separator" => Some(Box::new(BreakLine)),
         _ => None,
     }
 }

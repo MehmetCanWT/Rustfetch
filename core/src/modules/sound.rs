@@ -1,4 +1,4 @@
-use crate::proc::{run_with_timeout, OPTIONAL_SOURCE_TIMEOUT};
+use crate::proc::{OPTIONAL_SOURCE_TIMEOUT, run_with_timeout};
 use crate::{Info, Module};
 use std::fs;
 
@@ -27,7 +27,10 @@ pub fn parse_wpctl_output(output: &str) -> Option<String> {
     let rest = line.strip_prefix("Volume:")?.trim();
     let mut parts = rest.split_whitespace();
     let vol_float: f64 = parts.next()?.parse().ok()?;
-    let pct = (vol_float * 100.0).round() as u32;
+    if !vol_float.is_finite() || vol_float < 0.0 {
+        return None;
+    }
+    let pct = (vol_float * 100.0).round().clamp(0.0, 500.0) as u32;
     if rest.contains("[MUTED]") {
         Some(format!("{pct}% [MUTED]"))
     } else {
@@ -43,12 +46,12 @@ pub fn parse_wpctl_output(output: &str) -> Option<String> {
 /// happen on the " - " separator and not on the first dash.
 pub fn parse_asound_cards(content: &str) -> Option<String> {
     for line in content.lines() {
-        if let Some((_, right)) = line.split_once("]: ") {
-            if let Some((_, desc)) = right.split_once(" - ") {
-                let desc = desc.trim();
-                if !desc.is_empty() {
-                    return Some(desc.to_string());
-                }
+        if let Some((_, right)) = line.split_once("]: ")
+            && let Some((_, desc)) = right.split_once(" - ")
+        {
+            let desc = desc.trim();
+            if !desc.is_empty() {
+                return Some(desc.to_string());
             }
         }
     }

@@ -174,8 +174,42 @@ pub fn write_stdout_line(text: &str) -> bool {
     lock.write_all(text.as_bytes()).is_ok() && lock.write_all(b"\n").is_ok() && lock.flush().is_ok()
 }
 
+/// Expand `{value}` and `{}` placeholders in a single pass so placeholders
+/// inside `value` itself are not re-expanded.
+pub(crate) fn expand_value_template(template: &str, value: &str) -> String {
+    let mut out = String::with_capacity(template.len() + value.len());
+    let mut rest = template;
+    while let Some(idx) = rest.find('{') {
+        out.push_str(&rest[..idx]);
+        let after = &rest[idx..];
+        if let Some(tail) = after.strip_prefix("{value}") {
+            out.push_str(value);
+            rest = tail;
+        } else if let Some(tail) = after.strip_prefix("{}") {
+            out.push_str(value);
+            rest = tail;
+        } else {
+            out.push('{');
+            rest = &after[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_expand_value_template_avoids_double_substitution() {
+        assert_eq!(
+            super::expand_value_template("{value} / {}", "x{}"),
+            "x{} / x{}"
+        );
+        assert_eq!(
+            super::expand_value_template("Pre {value} {unknown}", "{value}"),
+            "Pre {value} {unknown}"
+        );
+    }
     use super::*;
 
     #[test]

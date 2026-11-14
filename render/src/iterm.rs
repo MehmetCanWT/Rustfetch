@@ -20,13 +20,13 @@ pub fn render_iterm_ex(
     if target_cols == 0 {
         return None;
     }
-    let file_bytes = std::fs::read(path).ok()?;
-    if file_bytes.is_empty() {
+    let (orig_width, orig_height) = crate::image::image_dimensions_checked(path)?;
+    if orig_width == 0 || orig_height == 0 {
         return None;
     }
 
-    let (orig_width, orig_height) = crate::image::image_dimensions_checked(path)?;
-    if orig_width == 0 || orig_height == 0 {
+    let file_bytes = std::fs::read(path).ok()?;
+    if file_bytes.is_empty() {
         return None;
     }
 
@@ -55,7 +55,9 @@ mod tests {
         let expected_b64 = BASE64_STANDARD.encode(dummy_data);
         assert_eq!(
             seq,
-            format!("\x1b]1337;File=inline=1;width=20;height=10;preserveAspectRatio=1:{expected_b64}\x07")
+            format!(
+                "\x1b]1337;File=inline=1;width=20;height=10;preserveAspectRatio=1:{expected_b64}\x07"
+            )
         );
     }
 

@@ -83,10 +83,10 @@ where
 
     // 8. LXC / LXD cgroup marker (works for non-systemd containers too)
     for cgroup_path in ["/proc/1/cgroup", "/proc/self/cgroup"] {
-        if let Some(cgroup) = read_str(cgroup_path) {
-            if cgroup_marker(&cgroup) {
-                return Some("LXC".to_string());
-            }
+        if let Some(cgroup) = read_str(cgroup_path)
+            && cgroup_marker(&cgroup)
+        {
+            return Some("LXC".to_string());
         }
     }
 
@@ -116,12 +116,12 @@ where
     // 11. PID 1 environment container variable
     if let Some(environ) = read_bytes("/proc/1/environ") {
         for entry in environ.split(|&b| b == 0) {
-            if let Ok(s) = std::str::from_utf8(entry) {
-                if let Some(val) = s.strip_prefix("container=") {
-                    let val = val.trim();
-                    if !val.is_empty() {
-                        return Some(format_runtime(val));
-                    }
+            if let Ok(s) = std::str::from_utf8(entry)
+                && let Some(val) = s.strip_prefix("container=")
+            {
+                let val = val.trim();
+                if !val.is_empty() {
+                    return Some(format_runtime(val));
                 }
             }
         }

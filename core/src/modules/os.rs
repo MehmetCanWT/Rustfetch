@@ -74,7 +74,6 @@ pub fn parse_os(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_snapshot;
 
     #[test]
     fn test_parse_os_fedora_pretty_name() {
@@ -127,7 +126,7 @@ VERSION_ID=42
 NAME="Arch Linux"
 ID=arch
 "#;
-        assert_snapshot!(parse_os(fixture).unwrap(), @"Arch Linux");
+        assert_eq!(parse_os(fixture).as_deref(), Some("Arch Linux"));
     }
 
     #[test]
@@ -139,7 +138,7 @@ ID=arch
         );
 
         let fixture_single = "PRETTY_NAME='Void Linux'\n";
-        assert_snapshot!(parse_os(fixture_single).unwrap(), @"Void Linux");
+        assert_eq!(parse_os(fixture_single).as_deref(), Some("Void Linux"));
     }
 
     #[test]

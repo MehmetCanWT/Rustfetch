@@ -1,6 +1,6 @@
 # Images & Terminal Graphics Protocols
 
-RustFetch supports rendering high-resolution images, animated GIFs, and custom illustrations directly inside your terminal using modern graphics protocols (Kitty, Sixel, iTerm2) and universal 24-bit TrueColor ANSI half-blocks.
+RustFetch supports rendering high-resolution images, animated GIFs, and custom illustrations directly inside your terminal using modern graphics protocols (Kitty, Sixel, iTerm2), Unicode Braille, and universal 24-bit TrueColor ANSI half-blocks.
 
 ---
 
@@ -25,9 +25,10 @@ RustFetch automatically selects the optimal protocol supported by your terminal 
 
 | Protocol | Identification | Supported Terminals | Visual Quality |
 |---|---|---|---|
-| **Kitty** | `protocol = "kitty"` | Kitty, Ghostty, WezTerm | Native pixel graphics (zero distortion) |
+| **Kitty** | `protocol = "kitty"` | Kitty, Ghostty, WezTerm | Native pixel graphics with `U=1` Unicode placeholders (resize-safe) |
 | **Sixel** | `protocol = "sixel"` | Foot, WezTerm, mlterm, xterm (vt340) | 16/256-color raster bitmap |
 | **iTerm2** | `protocol = "iterm"` | iTerm2, WezTerm, mintty | Base64-encoded inline graphics |
+| **Braille** | `protocol = "braille"` | All Unicode terminals | High-resolution 2×4 Unicode Braille dot rendering |
 | **Half-block** | `protocol = "halfblock"` | **All terminals** (Alacritty, TTY, etc.) | High-density Unicode 24-bit TrueColor blocks |
 
 ### Protocol Configuration:
@@ -35,7 +36,7 @@ RustFetch automatically selects the optimal protocol supported by your terminal 
 [general.logo]
 image_path = "~/Pictures/profile.png"
 image_width_cols = 38
-protocol = "auto"         # "auto", "kitty", "halfblock", "sixel", "iterm"
+protocol = "auto"         # "auto", "kitty", "sixel", "iterm", "braille", "halfblock"
 ```
 
 ### Image Placement (logo positions)
@@ -52,6 +53,11 @@ the active logo, RustFetch prints a single warning line to stderr and renders th
 on the left instead. `behind` renders the image as a true text-underlay only in
 Kitty-compatible terminals (Kitty, Ghostty, WezTerm); elsewhere it is drawn as a normal
 foreground image.
+
+On Kitty, Ghostty, and WezTerm, RustFetch uses Kitty Unicode placeholders (`U=1`) so
+image logos sit inside normal terminal grid cells and reflow naturally with window resizes
+without drifting below the prompt. When image height is left unset in side-by-side layout,
+RustFetch clamps the image height to match the info card (`12..=24` rows).
 
 ---
 

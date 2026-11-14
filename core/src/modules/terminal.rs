@@ -14,11 +14,18 @@ impl Module for Terminal {
 }
 
 fn read_terminal() -> Option<String> {
-    if let Ok(p) = std::env::var("TERM_PROGRAM") {
+    let deferred_mux = std::env::var("TERM_PROGRAM").ok().and_then(|p| {
         let trimmed = p.trim();
-        if !trimmed.is_empty() {
-            return Some(format_terminal_name(trimmed));
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
         }
+    });
+    if let Some(ref prog) = deferred_mux
+        && !matches!(prog.to_ascii_lowercase().as_str(), "tmux" | "screen")
+    {
+        return Some(format_terminal_name(prog));
     }
     if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
         return Some("Ghostty".to_string());
@@ -83,6 +90,9 @@ fn read_terminal() -> Option<String> {
     #[cfg(target_os = "linux")]
     if let Some(proc_name) = detect_terminal_from_process() {
         return Some(proc_name);
+    }
+    if let Some(mux) = deferred_mux {
+        return Some(format_terminal_name(&mux));
     }
     // VTE_VERSION is exported by every VTE-based terminal (Ptyxis, Tilix,
     // Terminator, XFCE Terminal, ...), so it only identifies the generic VTE
@@ -170,20 +180,20 @@ fn detect_terminal_from_process() -> Option<String> {
         if pid <= 1 {
             break;
         }
-        if let Ok(comm) = fs::read_to_string(format!("/proc/{pid}/comm")) {
-            if let Some(name) = match_terminal_comm(&comm) {
-                return Some(name.to_string());
-            }
+        if let Ok(comm) = fs::read_to_string(format!("/proc/{pid}/comm"))
+            && let Some(name) = match_terminal_comm(&comm)
+        {
+            return Some(name.to_string());
         }
         let status_path = format!("/proc/{pid}/status");
         if let Ok(status) = fs::read_to_string(&status_path) {
             let mut next_pid = None;
             for line in status.lines() {
-                if let Some(rest) = line.strip_prefix("PPid:\t") {
-                    if let Ok(p) = rest.trim().parse::<u32>() {
-                        next_pid = Some(p);
-                        break;
-                    }
+                if let Some(rest) = line.strip_prefix("PPid:\t")
+                    && let Ok(p) = rest.trim().parse::<u32>()
+                {
+                    next_pid = Some(p);
+                    break;
                 }
             }
             match next_pid {

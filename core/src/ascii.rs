@@ -52,16 +52,15 @@ pub fn load_ascii_lines(path: &Path) -> io::Result<Vec<String>> {
 
 /// Determines whether a line acts as a frame separator in multi-frame ASCII animation files.
 pub fn is_frame_delimiter(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return false;
+    let trimmed_spaces = line.trim_matches([' ', '\t', '\r']);
+    if trimmed_spaces == "\x0c" {
+        return true;
     }
-    trimmed.starts_with("===")
-        || trimmed.starts_with("---")
-        || trimmed == "\x0c"
-        || trimmed == "[frame]"
-        || trimmed == "===FRAME==="
-        || trimmed == "---FRAME---"
+    let trimmed = trimmed_spaces.trim();
+    matches!(
+        trimmed,
+        "===" | "---" | "[frame]" | "===FRAME===" | "---FRAME---"
+    )
 }
 
 /// Parses multi-frame ASCII content from a single string.
@@ -207,12 +206,13 @@ pub fn apply_neofetch_colors(content: &str, colors: &[&str]) -> String {
 
     while offset < content.len() {
         let rest = &content[offset..];
-        if let Some((n, consumed)) = parse_color_token(rest) {
-            if n >= 1 && n <= colors.len() {
-                result.push_str(colors[n - 1]);
-                offset += consumed;
-                continue;
-            }
+        if let Some((n, consumed)) = parse_color_token(rest)
+            && n >= 1
+            && n <= colors.len()
+        {
+            result.push_str(colors[n - 1]);
+            offset += consumed;
+            continue;
         }
         let ch = rest.chars().next().unwrap_or('\0');
         result.push(ch);
@@ -342,5 +342,20 @@ mod tests {
         let result = load_ascii_frames(&file);
         assert!(result.is_err(), "empty single file must not yield a frame");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_is_frame_delimiter_form_feed_and_exact_markers() {
+        assert!(is_frame_delimiter("\x0c"));
+        assert!(is_frame_delimiter("  \x0c\t\r"));
+        assert!(is_frame_delimiter(" ===FRAME=== "));
+        assert!(is_frame_delimiter("---"));
+        assert!(is_frame_delimiter("==="));
+        assert!(is_frame_delimiter("[frame]"));
+        assert!(is_frame_delimiter("---FRAME---"));
+        assert!(!is_frame_delimiter("------"));
+        assert!(!is_frame_delimiter("======"));
+        assert!(!is_frame_delimiter("--- title ---"));
+        assert!(!is_frame_delimiter(""));
     }
 }

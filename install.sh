@@ -182,12 +182,14 @@ else
     fi
 
     if [ -n "${RUSTFETCH_VERSION:-}" ]; then
-        log "Fetching RustFetch source for ref '${RUSTFETCH_VERSION}' from ${GITHUB_URL}..."
-        if ! git clone --depth 1 --branch "${RUSTFETCH_VERSION}" "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null; then
-            # Accept both "0.1.5" and "v0.1.5" forms.
-            if ! git clone --depth 1 --branch "v${RUSTFETCH_VERSION}" "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null; then
-                die "Could not fetch git ref '${RUSTFETCH_VERSION}' from ${GITHUB_URL}."
-            fi
+        CLEAN_VERSION="${RUSTFETCH_VERSION#v}"
+        log "Fetching RustFetch source for '${RUSTFETCH_VERSION}' from ${GITHUB_URL}..."
+        # Try explicit tag forms first; if no git tag exists yet, fall back to main.
+        if ! git clone --depth 1 --branch "v${CLEAN_VERSION}" "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null \
+            && ! git clone --depth 1 --branch "${CLEAN_VERSION}" "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null; then
+            warn "Tag '${RUSTFETCH_VERSION}' not found; building latest main branch instead."
+            rm -rf "$SRC_DIR"
+            git clone --depth 1 "${GITHUB_URL}.git" "$SRC_DIR"
         fi
     else
         log "Fetching latest source code from ${GITHUB_URL}..."
@@ -229,7 +231,9 @@ install_atomic() {
 SYSTEM_BIN="/usr/local/bin"
 USER_BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
-if [ "$EUID" -eq 0 ] || [ -w "$SYSTEM_BIN" ]; then
+if [ -n "${RUSTFETCH_INSTALL_DIR:-}" ]; then
+    FINAL_BIN_DIR="$RUSTFETCH_INSTALL_DIR"
+elif [ "$EUID" -eq 0 ] || [ -w "$SYSTEM_BIN" ]; then
     FINAL_BIN_DIR="$SYSTEM_BIN"
 else
     FINAL_BIN_DIR="$USER_BIN"
@@ -272,13 +276,16 @@ mkdir -p "$CONFIG_DIR/logos"
 
 # 6. Install shell completions
 log "Installing shell auto-completions..."
+RFETCH_BIN="$FINAL_BIN_DIR/rfetch"
 BASH_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
 mkdir -p "$BASH_DIR"
 if "$INSTALLED_BIN" --completions bash > "$BASH_DIR/rustfetch.tmp" 2>/dev/null; then
     mv -f "$BASH_DIR/rustfetch.tmp" "$BASH_DIR/rustfetch"
-    sed 's/rustfetch/rfetch/g' "$BASH_DIR/rustfetch" > "$BASH_DIR/rfetch.tmp" 2>/dev/null \
-        && mv -f "$BASH_DIR/rfetch.tmp" "$BASH_DIR/rfetch" \
-        || ln -sfn "$BASH_DIR/rustfetch" "$BASH_DIR/rfetch"
+    if [ -x "$RFETCH_BIN" ] && "$RFETCH_BIN" --completions bash > "$BASH_DIR/rfetch.tmp" 2>/dev/null; then
+        mv -f "$BASH_DIR/rfetch.tmp" "$BASH_DIR/rfetch"
+    else
+        rm -f "$BASH_DIR/rfetch.tmp"
+    fi
 else
     rm -f "$BASH_DIR/rustfetch.tmp"
     warn "Could not generate bash completions."
@@ -288,9 +295,11 @@ ZSH_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
 mkdir -p "$ZSH_DIR"
 if "$INSTALLED_BIN" --completions zsh > "$ZSH_DIR/_rustfetch.tmp" 2>/dev/null; then
     mv -f "$ZSH_DIR/_rustfetch.tmp" "$ZSH_DIR/_rustfetch"
-    sed 's/rustfetch/rfetch/g' "$ZSH_DIR/_rustfetch" > "$ZSH_DIR/_rfetch.tmp" 2>/dev/null \
-        && mv -f "$ZSH_DIR/_rfetch.tmp" "$ZSH_DIR/_rfetch" \
-        || ln -sfn "$ZSH_DIR/_rustfetch" "$ZSH_DIR/_rfetch"
+    if [ -x "$RFETCH_BIN" ] && "$RFETCH_BIN" --completions zsh > "$ZSH_DIR/_rfetch.tmp" 2>/dev/null; then
+        mv -f "$ZSH_DIR/_rfetch.tmp" "$ZSH_DIR/_rfetch"
+    else
+        rm -f "$ZSH_DIR/_rfetch.tmp"
+    fi
 else
     rm -f "$ZSH_DIR/_rustfetch.tmp"
     warn "Could not generate zsh completions."
@@ -300,9 +309,11 @@ FISH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
 mkdir -p "$FISH_DIR"
 if "$INSTALLED_BIN" --completions fish > "$FISH_DIR/rustfetch.fish.tmp" 2>/dev/null; then
     mv -f "$FISH_DIR/rustfetch.fish.tmp" "$FISH_DIR/rustfetch.fish"
-    sed 's/complete -c rustfetch/complete -c rfetch/g' "$FISH_DIR/rustfetch.fish" > "$FISH_DIR/rfetch.fish.tmp" 2>/dev/null \
-        && mv -f "$FISH_DIR/rfetch.fish.tmp" "$FISH_DIR/rfetch.fish" \
-        || ln -sfn "$FISH_DIR/rustfetch.fish" "$FISH_DIR/rfetch.fish"
+    if [ -x "$RFETCH_BIN" ] && "$RFETCH_BIN" --completions fish > "$FISH_DIR/rfetch.fish.tmp" 2>/dev/null; then
+        mv -f "$FISH_DIR/rfetch.fish.tmp" "$FISH_DIR/rfetch.fish"
+    else
+        rm -f "$FISH_DIR/rfetch.fish.tmp"
+    fi
 else
     rm -f "$FISH_DIR/rustfetch.fish.tmp"
     warn "Could not generate fish completions."
@@ -428,7 +439,7 @@ else
 fi
 
 echo ""
-echo -e "${GREEN}==> Installation completed successfully!${NC} 🚀"
+echo -e "${GREEN}==> Installation completed successfully!${NC}"
 echo -e "Binaries installed to: ${BLUE}${FINAL_BIN_DIR}${NC}"
 echo -e "You can now run '${GREEN}rustfetch${NC}' or '${GREEN}rfetch${NC}' in your terminal."
 

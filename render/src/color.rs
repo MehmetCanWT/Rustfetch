@@ -21,24 +21,21 @@ fn load_and_sample_image(path: &str) -> Option<ColorSample> {
         return None;
     }
 
-    // Composite alpha in place: no second full-resolution buffer is allocated.
-    let mut raw = rgba_img.into_raw();
-    for chunk in raw.as_chunks_mut::<4>().0 {
-        let a = chunk[3] as u32;
-        if a < 255 {
-            let inv = 255 - a;
-            chunk[0] = ((chunk[0] as u32 * a + 20 * inv + 127) / 255) as u8;
-            chunk[1] = ((chunk[1] as u32 * a + 20 * inv + 127) / 255) as u8;
-            chunk[2] = ((chunk[2] as u32 * a + 20 * inv + 127) / 255) as u8;
-        }
-        chunk[3] = 255;
-    }
-
-    let buffer = crate::image::resize_rgba(raw, orig_w, orig_h, 60, 60, fr::FilterType::Bilinear)?;
+    let buffer = crate::image::resize_rgba(
+        rgba_img.into_raw(),
+        orig_w,
+        orig_h,
+        60,
+        60,
+        fr::FilterType::Bilinear,
+    )?;
     let mut counts: HashMap<(u8, u8, u8), u32> = HashMap::new();
     let mut lum_sum: u64 = 0;
     let mut pixel_count: u64 = 0;
-    for &[r, g, b, _] in buffer.as_chunks::<4>().0 {
+    for &[r, g, b, a] in buffer.as_chunks::<4>().0 {
+        if a < 32 {
+            continue;
+        }
         let qr = (r / 4) * 4;
         let qg = (g / 4) * 4;
         let qb = (b / 4) * 4;
@@ -201,6 +198,29 @@ fn palette_from_counts(sample: &ColorSample, count: usize) -> Option<Vec<(u8, u8
             palette.push(lightened);
         }
         i += 1;
+    }
+
+    let mut i = 0;
+    while palette.len() < count && i < palette.len() {
+        let base = palette[i];
+        let darkened = (
+            (base.0 as f64 * 0.72).round() as u8,
+            (base.1 as f64 * 0.72).round() as u8,
+            (base.2 as f64 * 0.72).round() as u8,
+        );
+        if !palette.contains(&darkened) {
+            palette.push(darkened);
+        }
+        i += 1;
+    }
+
+    if !palette.is_empty() {
+        let seed_len = palette.len();
+        let mut idx = 0;
+        while palette.len() < count {
+            palette.push(palette[idx % seed_len]);
+            idx += 1;
+        }
     }
 
     Some(palette)
@@ -419,7 +439,11 @@ pub fn parse_color(s: &str) -> Option<(u8, u8, u8)> {
 }
 
 pub fn interpolate_color(c1: (u8, u8, u8), c2: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
-    let t = t.clamp(0.0, 1.0);
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let r = (c1.0 as f32 * (1.0 - t) + c2.0 as f32 * t).round() as u8;
     let g = (c1.1 as f32 * (1.0 - t) + c2.1 as f32 * t).round() as u8;
     let b = (c1.2 as f32 * (1.0 - t) + c2.2 as f32 * t).round() as u8;
@@ -433,7 +457,11 @@ pub fn interpolate_gradient(colors: &[(u8, u8, u8)], t: f32) -> (u8, u8, u8) {
     if colors.len() == 1 {
         return colors[0];
     }
-    let t = t.clamp(0.0, 1.0);
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let segments = colors.len() - 1;
     let scaled = t * segments as f32;
     let idx = (scaled.floor() as usize).min(segments - 1);

@@ -73,7 +73,7 @@ jobs:
     - name: Check MSRV
       # Every dependency and every workspace member must build on the declared
       # minimum supported Rust version (see [workspace.package] rust-version).
-      run: cargo check --workspace --all-targets --locked
+      run: cargo check --workspace --all-targets --locked --message-format=short
 
   deny:
     name: Dependency Policy

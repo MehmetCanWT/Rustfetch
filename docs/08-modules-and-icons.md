@@ -70,7 +70,7 @@ Every icon can be overridden per module with `icon = "..."` in `[[modules]]`.
 | `local_ip` | `󰩟` | Local IP |
 | `locale` | `󰗊` | Locale |
 | `processes` | `󰒋` | Process count |
-| `init` | `` | Init system |
+| `init` | `` | Init system |
 | `container` | `󰡨` | Container / VM |
 | `update` | `󰚰` | Update notifier |
 | `custom` | `󰅐` | Static custom row |

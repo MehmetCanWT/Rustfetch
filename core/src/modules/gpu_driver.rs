@@ -46,12 +46,12 @@ pub fn detect_gpu_driver_from(
                 continue;
             }
             let driver_link = entry.path().join("device/driver");
-            if let Ok(target) = fs::read_link(&driver_link) {
-                if let Some(drv) = target.file_name().and_then(|s| s.to_str()) {
-                    let drv_str = drv.trim().to_string();
-                    if !drv_str.is_empty() && !drivers.contains(&drv_str) {
-                        drivers.push(drv_str);
-                    }
+            if let Ok(target) = fs::read_link(&driver_link)
+                && let Some(drv) = target.file_name().and_then(|s| s.to_str())
+            {
+                let drv_str = drv.trim().to_string();
+                if !drv_str.is_empty() && !drivers.contains(&drv_str) {
+                    drivers.push(drv_str);
                 }
             }
         }
@@ -125,10 +125,10 @@ fn valid_version(candidate: &str) -> Option<String> {
 /// Extracts "nvidia <version>" from /proc/driver/nvidia/version content.
 pub fn parse_nvidia_version(content: &str) -> Option<String> {
     for line in content.lines() {
-        if line.contains("Kernel Module") || line.contains("NVRM version") {
-            if let Some(version) = first_version_token(line) {
-                return Some(version);
-            }
+        if (line.contains("Kernel Module") || line.contains("NVRM version"))
+            && let Some(version) = first_version_token(line)
+        {
+            return Some(version);
         }
     }
     None

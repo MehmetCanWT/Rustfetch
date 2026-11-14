@@ -72,10 +72,10 @@ pub fn walk_parent_shell(
                 return Some(shell.to_string());
             }
             // Wrapper binaries can be a versioned shell, e.g. "bash-5.2" or "zsh".
-            if let Some(stem) = trimmed.split('-').next() {
-                if let Some(shell) = known_shell_name(stem) {
-                    return Some(shell.to_string());
-                }
+            if let Some(stem) = trimmed.split('-').next()
+                && let Some(shell) = known_shell_name(stem)
+            {
+                return Some(shell.to_string());
             }
         }
         // Do not loop forever on a corrupted/racy parent chain.

@@ -14,10 +14,10 @@ impl Module for Kernel {
 }
 
 pub fn read_kernel() -> Option<String> {
-    if let Ok(content) = std::fs::read_to_string("/proc/version") {
-        if let Some(version) = parse_kernel(&content) {
-            return Some(version);
-        }
+    if let Ok(content) = std::fs::read_to_string("/proc/version")
+        && let Some(version) = parse_kernel(&content)
+    {
+        return Some(version);
     }
     if let Ok(content) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
         let trimmed = content.trim();

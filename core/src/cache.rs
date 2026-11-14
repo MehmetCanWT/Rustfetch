@@ -66,26 +66,30 @@ impl Cache {
 
     /// Creates `dir` (and parents) with 0700 permissions on Unix.
     fn prepare_dir(dir: &Path) {
-        if dir.is_dir() {
-            return;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true).mode(0o700);
-            let _ = builder.create(dir);
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = fs::create_dir_all(dir);
+        if !dir.is_dir() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut builder = fs::DirBuilder::new();
+                builder.recursive(true).mode(0o700);
+                let _ = builder.create(dir);
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = fs::create_dir_all(dir);
+            }
         }
         // Make sure an existing directory (created by an older version with the
         // default umask) is not group/world readable.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            if let Ok(meta) = fs::symlink_metadata(dir)
+                && meta.file_type().is_dir()
+                && meta.uid() == unsafe { libc::geteuid() }
+            {
+                let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+            }
         }
     }
 
@@ -180,15 +184,27 @@ impl Cache {
         if let Some(parent) = temp_path.parent() {
             Self::prepare_dir(parent);
         }
-        if fs::write(&temp_path, value).is_ok() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600));
-            }
+        #[cfg(unix)]
+        let wrote = {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp_path)
+                .and_then(|mut f| f.write_all(value.as_bytes()))
+                .is_ok()
+        };
+        #[cfg(not(unix))]
+        let wrote = fs::write(&temp_path, value).is_ok();
+
+        if wrote {
             if fs::rename(&temp_path, &self.dir).is_err() {
-                let _ = fs::remove_file(temp_path);
+                let _ = fs::remove_file(&temp_path);
             }
+        } else {
+            let _ = fs::remove_file(&temp_path);
         }
     }
 
@@ -315,6 +331,23 @@ mod tests {
         let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "cache directory must be user-private");
         assert!(dir.is_dir());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_dir_tightens_existing_loose_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_root("tighten");
+        let dir = root.join("rustfetch");
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let _cache = Cache::for_path(dir.join("entry"));
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "existing cache directory must be tightened to 0o700"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

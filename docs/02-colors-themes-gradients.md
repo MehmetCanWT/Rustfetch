@@ -74,6 +74,7 @@ RustFetch allows configuring how the terminal color preview is displayed:
 enabled = true             # Toggle color preview
 symbol = "●"               # Symbol glyph: "●", "■", "󰮯", "◆", ""
 block = false              # If true, outputs colored background blocks ("  ")
+image_palette = true       # Extract 16-color palette from active image logo
 position = "bottom"        # "bottom", "top", or "both"
 rows = 1                   # 1 (8 standard colors) or 2 (16 colors with bright variants)
 # custom = ["#1e1e2e", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#cba6f7"]

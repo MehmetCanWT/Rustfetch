@@ -22,16 +22,23 @@ pub fn detect_from_root(root: &Path) -> Option<Info> {
 
     let mut batteries = Vec::new();
     for path in entries {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if name.starts_with("hid") || name.starts_with("ucsi") {
+            continue;
+        }
+        if fs::read_to_string(path.join("scope"))
+            .is_ok_and(|s| s.trim().eq_ignore_ascii_case("Device"))
+        {
+            continue;
+        }
         if fs::read_to_string(path.join("type"))
             .is_ok_and(|text| text.trim().eq_ignore_ascii_case("Battery"))
+            && let Some(info) = detect_from_dir(&path, &name)
         {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if let Some(info) = detect_from_dir(&path, &name) {
-                batteries.push(info);
-            }
+            batteries.push(info);
         }
     }
 

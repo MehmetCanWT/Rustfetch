@@ -145,12 +145,12 @@ where
     let mut stats = stat("/")?;
     if stats.total_bytes < one_gib {
         for fallback in ["/sysroot", "/var"] {
-            if let Some(candidate) = stat(fallback) {
-                if candidate.total_bytes >= one_gib {
-                    chosen = fallback;
-                    stats = candidate;
-                    break;
-                }
+            if let Some(candidate) = stat(fallback)
+                && candidate.total_bytes >= one_gib
+            {
+                chosen = fallback;
+                stats = candidate;
+                break;
             }
         }
     }

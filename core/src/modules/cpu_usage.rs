@@ -55,8 +55,8 @@ pub fn parse_proc_stat_line(line: &str) -> Option<(u64, u64)> {
     if vals.len() < 4 {
         return None;
     }
-    let idle = vals[3] + vals.get(4).copied().unwrap_or(0); // idle + iowait
-    let total: u64 = vals.iter().take(8).sum();
+    let idle = vals[3].saturating_add(vals.get(4).copied().unwrap_or(0)); // idle + iowait
+    let total: u64 = vals.iter().take(8).copied().fold(0, u64::saturating_add);
     Some((total, idle))
 }
 

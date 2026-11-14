@@ -37,10 +37,10 @@ fn container_markers(
     if path_exists("/.dockerenv") || path_exists("/run/.containerenv") {
         return true;
     }
-    if let Some(content) = read_str("/run/systemd/container") {
-        if !content.trim().is_empty() {
-            return true;
-        }
+    if let Some(content) = read_str("/run/systemd/container")
+        && !content.trim().is_empty()
+    {
+        return true;
     }
     if let Some(cgroup) = read_str("/proc/1/cgroup") {
         let lower = cgroup.to_lowercase();
@@ -78,10 +78,12 @@ pub fn parse_init(exe_path: Option<&Path>, comm: Option<&str>) -> Option<String>
         if let Some(identified) = identify_init(&path_str) {
             return Some(identified.to_string());
         }
-        if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
-            if !file_name.is_empty() && file_name != "init" && file_name != "exe" {
-                return Some(file_name.to_string());
-            }
+        if let Some(file_name) = path.file_name().and_then(|f| f.to_str())
+            && !file_name.is_empty()
+            && file_name != "init"
+            && file_name != "exe"
+        {
+            return Some(file_name.to_string());
         }
     }
 

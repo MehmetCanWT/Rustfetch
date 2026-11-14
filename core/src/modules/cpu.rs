@@ -101,12 +101,11 @@ pub fn read_boost_mhz(cpu_root: &Path) -> Option<u64> {
         "cpu0/cpufreq/cpuinfo_max_freq",
         "cpu0/cpufreq/scaling_max_freq",
     ] {
-        if let Ok(text) = fs::read_to_string(cpu_root.join(relative)) {
-            if let Ok(khz) = text.trim().parse::<u64>() {
-                if khz > 0 {
-                    return Some(khz / 1000);
-                }
-            }
+        if let Ok(text) = fs::read_to_string(cpu_root.join(relative))
+            && let Ok(khz) = text.trim().parse::<u64>()
+            && khz > 0
+        {
+            return Some(khz / 1000);
         }
     }
     None
@@ -130,7 +129,6 @@ pub fn cpuinfo_from_device_tree(model_path: &Path, cpuinfo: &str) -> Option<CpuI
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_snapshot;
 
     /// Realistic Fedora Linux /proc/cpuinfo fixture with 2 processor blocks (AMD Ryzen 7 5800X).
     const FEDORA_RYZEN_CPUINFO: &str = "processor\t: 0
@@ -163,7 +161,7 @@ cpu cores\t: 8
     #[test]
     fn test_parse_cpuinfo_fedora_2_cores() {
         let result = parse_cpuinfo(FEDORA_RYZEN_CPUINFO);
-        assert_snapshot!(result.unwrap(), @"AMD Ryzen 7 5800X (2)");
+        assert_eq!(result.as_deref(), Some("AMD Ryzen 7 5800X (2)"));
     }
 
     #[test]
@@ -175,7 +173,7 @@ cpu cores\t: 8
             ));
         }
         let result = parse_cpuinfo(&content);
-        assert_snapshot!(result.unwrap(), @"AMD Ryzen 7 5800X (16)");
+        assert_eq!(result.as_deref(), Some("AMD Ryzen 7 5800X (16)"));
     }
 
     #[test]

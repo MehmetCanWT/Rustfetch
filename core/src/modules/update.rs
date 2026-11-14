@@ -1,6 +1,6 @@
-use crate::proc::run_with_timeout;
 use crate::proc::NETWORK_TIMEOUT;
-use crate::{cache::Cache, Info, Module};
+use crate::proc::run_with_timeout;
+use crate::{Info, Module, cache::Cache};
 use std::process::Command;
 use std::time::Duration;
 
@@ -86,6 +86,8 @@ pub fn format_version_with_codename(version: &str) -> String {
 
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/MehmetCanWT/rustfetch/releases/latest";
+const GITHUB_MAIN_CARGO_TOML_URL: &str =
+    "https://raw.githubusercontent.com/MehmetCanWT/rustfetch/main/Cargo.toml";
 const UPDATE_CACHE_TTL: Duration = Duration::from_secs(6 * 3600);
 const UPDATE_CHECK_THROTTLE: Duration = Duration::from_secs(3600);
 
@@ -149,14 +151,12 @@ pub fn parse_has_default_ipv4_route(routes: &str) -> bool {
         let dest = fields.next();
         let _gateway = fields.next();
         let flags = fields.next();
-        if let (Some(dest), Some(flags)) = (dest, flags) {
-            if dest == "00000000" {
-                if let Ok(f) = u32::from_str_radix(flags, 16) {
-                    if f & 0x0001 != 0 {
-                        return true;
-                    }
-                }
-            }
+        if let (Some(dest), Some(flags)) = (dest, flags)
+            && dest == "00000000"
+            && let Ok(f) = u32::from_str_radix(flags, 16)
+            && f & 0x0001 != 0
+        {
+            return true;
         }
     }
     false
@@ -176,15 +176,16 @@ pub fn parse_has_default_ipv6_route(routes_v6: &str) -> bool {
         let _use = fields.next();
         let _flags = fields.next();
         let iface = fields.next();
-        if let (Some(dest), Some(prefix)) = (dest, prefix) {
-            if dest == "00000000000000000000000000000000" && prefix == "00" {
-                if let Some(iface) = iface {
-                    if iface != "lo" {
-                        return true;
-                    }
-                } else {
+        if let (Some(dest), Some(prefix)) = (dest, prefix)
+            && dest == "00000000000000000000000000000000"
+            && prefix == "00"
+        {
+            if let Some(iface) = iface {
+                if iface != "lo" {
                     return true;
                 }
+            } else {
+                return true;
             }
         }
     }
@@ -324,19 +325,19 @@ fn split_cached_version_codename(entry: &str) -> (String, Option<String>) {
 pub fn extract_codename_from_release_title(title: &str) -> Option<String> {
     if let Some(start) = title.find('"') {
         let rest = &title[start + 1..];
-        if let Some(end) = rest.find('"') {
-            if let Some(clean) = sanitize_codename(rest[..end].trim()) {
-                return Some(clean);
-            }
+        if let Some(end) = rest.find('"')
+            && let Some(clean) = sanitize_codename(rest[..end].trim())
+        {
+            return Some(clean);
         }
     }
     for sep in ["—", "–", " - "] {
         if let Some((_, after)) = title.split_once(sep) {
             let candidate = after.trim().trim_matches(['"', '\'', '(', ')']);
-            if parse_semver(candidate).is_none() {
-                if let Some(clean) = sanitize_codename(candidate) {
-                    return Some(clean);
-                }
+            if parse_semver(candidate).is_none()
+                && let Some(clean) = sanitize_codename(candidate)
+            {
+                return Some(clean);
             }
         }
     }
@@ -439,7 +440,15 @@ fn fetch_url(url: &str) -> Option<String> {
         None => {
             let wget = run_with_timeout(
                 wget_binary(),
-                &["-q", "-O-", "--timeout=3", "--tries=1", url],
+                &[
+                    "-q",
+                    "-O-",
+                    "--timeout=3",
+                    "--tries=1",
+                    "--max-redirect=5",
+                    "--https-only",
+                    url,
+                ],
                 NETWORK_TIMEOUT,
             )?;
             if !wget.success() {
@@ -469,13 +478,63 @@ pub fn check_latest_release() -> Option<(String, String)> {
     Some((version, code))
 }
 
-/// Fetches the latest published release from the GitHub API.
-///
-/// There is deliberately no Cargo.toml fallback: an unreleased version on the
-/// default branch must never be advertised as an available update.
+/// Parses `[workspace.package].version` or `[package].version` from a `Cargo.toml`
+/// manifest fetched from the repository.
+pub fn parse_cargo_toml_version(toml_text: &str) -> Option<String> {
+    let mut in_pkg_section = false;
+    for raw_line in toml_text.lines() {
+        let line = raw_line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            let section = line[1..line.len() - 1].trim();
+            in_pkg_section = section == "workspace.package" || section == "package";
+            continue;
+        }
+        if !in_pkg_section {
+            continue;
+        }
+        if let Some((key, rest)) = line.split_once('=')
+            && key.trim() == "version"
+        {
+            let raw_val = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+            let clean = raw_val.trim().trim_start_matches(['v', 'V']);
+            if parse_semver(clean).is_some() {
+                return Some(clean.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Chooses the highest valid semver candidate between a GitHub release entry and
+/// `Cargo.toml` on `main`.
+pub fn pick_newer_candidate(
+    release: Option<(String, Option<String>)>,
+    main_cargo: Option<String>,
+) -> Option<(String, Option<String>)> {
+    match (release, main_cargo) {
+        (Some((rel_ver, rel_code)), Some(cargo_ver)) => {
+            if is_newer_version(&rel_ver, &cargo_ver) {
+                Some((cargo_ver, None))
+            } else {
+                Some((rel_ver, rel_code))
+            }
+        }
+        (Some(rel), None) => Some(rel),
+        (None, Some(cargo_ver)) => Some((cargo_ver, None)),
+        (None, None) => None,
+    }
+}
+
+/// Fetches the latest version across GitHub Releases and `Cargo.toml` on `main`.
 pub fn fetch_latest_github_version() -> Option<String> {
-    let (version, codename) =
-        fetch_url(GITHUB_LATEST_RELEASE_URL).and_then(|body| parse_github_release_info(&body))?;
+    let release =
+        fetch_url(GITHUB_LATEST_RELEASE_URL).and_then(|body| parse_github_release_info(&body));
+    let main_cargo =
+        fetch_url(GITHUB_MAIN_CARGO_TOML_URL).and_then(|body| parse_cargo_toml_version(&body));
+    let (version, codename) = pick_newer_candidate(release, main_cargo)?;
     Some(match codename {
         Some(code) => format!("{version}|{code}"),
         None => version,
@@ -581,5 +640,49 @@ mod tests {
     fn test_cached_codename_is_sanitized() {
         let message = format_update_message("0.1.2", "0.2.0|Si\u{1b}[2Jamese");
         assert_eq!(message, "Update available (v0.1.2 -> v0.2.0 \"Si2Jamese\")");
+    }
+
+    #[test]
+    fn test_parse_cargo_toml_version_and_pick_newer_candidate() {
+        let manifest = r#"
+[workspace]
+members = ["core", "cli"]
+
+[workspace.package]
+version = "0.1.6" # current main bump
+edition = "2024"
+
+[dependencies]
+serde = "1"
+"#;
+        assert_eq!(parse_cargo_toml_version(manifest).as_deref(), Some("0.1.6"));
+        assert_eq!(
+            parse_cargo_toml_version("[workspace]\nversion = \"1.0.0\"\n"),
+            None
+        );
+
+        // main Cargo.toml newer than release -> picks Cargo.toml version
+        assert_eq!(
+            pick_newer_candidate(
+                Some(("0.1.5".to_string(), Some("Ragdoll".to_string()))),
+                Some("0.1.6".to_string())
+            ),
+            Some(("0.1.6".to_string(), None))
+        );
+
+        // release equals or beats main Cargo.toml -> preserves release codename
+        assert_eq!(
+            pick_newer_candidate(
+                Some(("0.1.6".to_string(), Some("Van Kedisi".to_string()))),
+                Some("0.1.6".to_string())
+            ),
+            Some(("0.1.6".to_string(), Some("Van Kedisi".to_string())))
+        );
+
+        // release missing -> falls back to main Cargo.toml
+        assert_eq!(
+            pick_newer_candidate(None, Some("0.2.0".to_string())),
+            Some(("0.2.0".to_string(), None))
+        );
     }
 }

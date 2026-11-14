@@ -46,8 +46,13 @@ fn emit_rle(out: &mut String, ch: char, count: usize) {
 
 /// Encodes an RGBA image buffer into a Sixel escape sequence.
 pub fn encode_sixel(rgba_data: &[u8], width: u32, height: u32) -> String {
-    let total_pixels = (width as usize) * (height as usize);
-    if total_pixels == 0 || rgba_data.len() < total_pixels * 4 {
+    let Some(total_pixels) = (width as usize).checked_mul(height as usize) else {
+        return String::new();
+    };
+    let Some(required_bytes) = total_pixels.checked_mul(4) else {
+        return String::new();
+    };
+    if total_pixels == 0 || rgba_data.len() < required_bytes {
         return String::new();
     }
 
@@ -156,8 +161,10 @@ pub fn encode_sixel(rgba_data: &[u8], width: u32, height: u32) -> String {
             emit_rle(&mut out, cur_ch, count);
         }
 
-        // Newline (advance down 6 pixels and return to col 0)
-        out.push('-');
+        // Newline (advance down 6 pixels and return to col 0) between bands
+        if band_y + 6 < h {
+            out.push('-');
+        }
     }
 
     // ST (String Terminator)

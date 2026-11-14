@@ -143,10 +143,10 @@ pub(crate) fn detect_iterm(get: impl Fn(&str) -> Option<String>, is_tty: bool) -
     if get("LC_TERMINAL").as_deref() == Some("iTerm2") {
         return true;
     }
-    if let Some(program) = get("TERM_PROGRAM") {
-        if program.to_lowercase().contains("iterm") {
-            return true;
-        }
+    if let Some(program) = get("TERM_PROGRAM")
+        && program.to_lowercase().contains("iterm")
+    {
+        return true;
     }
     false
 }
@@ -158,6 +158,38 @@ fn stdout_is_tty() -> bool {
 
 pub fn supports_kitty() -> bool {
     detect_kitty(|key| std::env::var(key).ok(), stdout_is_tty())
+}
+
+/// Pure detection of Kitty Unicode placeholder (`U=1`) support.
+///
+/// Supported in Kitty (>= 0.28) and Ghostty; partial Kitty-protocol
+/// implementations like WezTerm and Rio fall back to direct placement.
+pub(crate) fn detect_kitty_placeholders(
+    get: impl Fn(&str) -> Option<String>,
+    is_tty: bool,
+) -> bool {
+    if !is_tty || colors_disabled(&get) {
+        return false;
+    }
+    if env_flag_is_set(&get, "KITTY_WINDOW_ID")
+        || env_flag_is_set(&get, "KITTY_PID")
+        || env_flag_is_set(&get, "GHOSTTY_RESOURCES_DIR")
+    {
+        return true;
+    }
+    if env_value_contains(&get, "TERM", "kitty") || env_value_contains(&get, "TERM", "ghostty") {
+        return true;
+    }
+    if let Some(program) = get("TERM_PROGRAM")
+        && program.to_lowercase().contains("ghostty")
+    {
+        return true;
+    }
+    false
+}
+
+pub fn supports_kitty_placeholders() -> bool {
+    detect_kitty_placeholders(|key| std::env::var(key).ok(), stdout_is_tty())
 }
 
 pub fn supports_sixel() -> bool {
@@ -172,10 +204,10 @@ pub fn is_tmux() -> bool {
     if std::env::var("TMUX").is_ok() {
         return true;
     }
-    if let Ok(term) = std::env::var("TERM") {
-        if term.starts_with("tmux") || term.starts_with("screen") {
-            return true;
-        }
+    if let Ok(term) = std::env::var("TERM")
+        && (term.starts_with("tmux") || term.starts_with("screen"))
+    {
+        return true;
     }
     false
 }
@@ -243,6 +275,34 @@ mod tests {
         ));
         assert!(!detect_kitty(
             fake_env(&[("TERM", "xterm-kitty"), ("NO_COLOR", "1")]),
+            true
+        ));
+    }
+
+    #[test]
+    fn kitty_placeholder_detection_excludes_partial_implementations() {
+        assert!(detect_kitty_placeholders(
+            fake_env(&[("KITTY_WINDOW_ID", "1")]),
+            true
+        ));
+        assert!(detect_kitty_placeholders(
+            fake_env(&[("GHOSTTY_RESOURCES_DIR", "/usr/share/ghostty")]),
+            true
+        ));
+        assert!(detect_kitty_placeholders(
+            fake_env(&[("TERM_PROGRAM", "ghostty")]),
+            true
+        ));
+        assert!(!detect_kitty_placeholders(
+            fake_env(&[("WEZTERM_PANE", "0"), ("TERM_PROGRAM", "WezTerm")]),
+            true
+        ));
+        assert!(!detect_kitty_placeholders(
+            fake_env(&[("KITTY_WINDOW_ID", "1")]),
+            false
+        ));
+        assert!(!detect_kitty_placeholders(
+            fake_env(&[("KITTY_WINDOW_ID", "1"), ("NO_COLOR", "1")]),
             true
         ));
     }

@@ -11,8 +11,32 @@ impl Module for DesktopModule {
     fn detect(&self) -> Option<Info> {
         let de = desktop_environment();
         let wm_type = env::var("WAYLAND_DISPLAY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
             .map(|_| "Wayland".to_string())
-            .or_else(|_| env::var("XDG_SESSION_TYPE"))
+            .or_else(|| {
+                env::var("XDG_SESSION_TYPE").ok().and_then(|s| {
+                    let t = s.trim();
+                    if t.eq_ignore_ascii_case("wayland") {
+                        Some("Wayland".to_string())
+                    } else if t.eq_ignore_ascii_case("x11") {
+                        Some("X11".to_string())
+                    } else if t.is_empty()
+                        || t.eq_ignore_ascii_case("tty")
+                        || t.eq_ignore_ascii_case("unspecified")
+                    {
+                        None
+                    } else {
+                        Some(t.to_string())
+                    }
+                })
+            })
+            .or_else(|| {
+                env::var("DISPLAY")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|_| "X11".to_string())
+            })
             .unwrap_or_default();
 
         let wm_name = detect_wm_name(&de);
@@ -29,15 +53,15 @@ impl Module for DesktopModule {
 /// specific token is used; `DESKTOP_SESSION` is often a full absolute path
 /// (`/usr/share/wayland-sessions/plasma.desktop`) and is reduced to its stem.
 fn desktop_environment() -> String {
-    if let Ok(value) = env::var("XDG_CURRENT_DESKTOP") {
-        if let Some(name) = preferred_desktop_from_list(&value) {
-            return name;
-        }
+    if let Ok(value) = env::var("XDG_CURRENT_DESKTOP")
+        && let Some(name) = preferred_desktop_from_list(&value)
+    {
+        return name;
     }
-    if let Ok(value) = env::var("DESKTOP_SESSION") {
-        if let Some(name) = normalize_desktop_name(&value) {
-            return name;
-        }
+    if let Ok(value) = env::var("DESKTOP_SESSION")
+        && let Some(name) = normalize_desktop_name(&value)
+    {
+        return name;
     }
     String::new()
 }

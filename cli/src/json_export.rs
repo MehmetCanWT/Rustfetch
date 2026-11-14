@@ -5,8 +5,8 @@
 
 use crate::layout::{self, InfoLine};
 use crate::text;
-use rustfetch_core::config::{default_icon_for_module, Config, ModuleConfig};
-use rustfetch_core::{detect_all, Module};
+use rustfetch_core::config::{Config, ModuleConfig, default_icon_for_module};
+use rustfetch_core::{Module, detect_all};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -42,7 +42,7 @@ pub fn run_json(
         };
 
         if let Some(fmt) = &mc.format {
-            value = fmt.replace("{value}", &value).replace("{}", &value);
+            value = text::expand_value_template(fmt, &value);
         }
 
         let icon = if config.general.icons {
@@ -192,11 +192,14 @@ pub fn extract_percentage(val: &str) -> Option<u8> {
         let num_str: String = prefix
             .chars()
             .rev()
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
             .collect();
         let num_str: String = num_str.chars().rev().collect();
-        if let Ok(p) = num_str.parse::<u8>() {
-            return Some(p.min(100));
+        if let Ok(p) = num_str.parse::<f64>()
+            && p.is_finite()
+            && p >= 0.0
+        {
+            return Some(p.round().clamp(0.0, 100.0) as u8);
         }
     }
 
@@ -207,11 +210,11 @@ pub fn extract_percentage(val: &str) -> Option<u8> {
             let unit = words.next().map(|u| u.to_lowercase()).unwrap_or_default();
             Some(n * unit_multiplier(&unit))
         };
-        if let (Some(used), Some(total)) = (parse_num(left.trim()), parse_num(right.trim())) {
-            if total > 0.0 {
-                let pct = ((used / total) * 100.0).round();
-                return Some((pct as u8).min(100));
-            }
+        if let (Some(used), Some(total)) = (parse_num(left.trim()), parse_num(right.trim()))
+            && total > 0.0
+        {
+            let pct = ((used / total) * 100.0).round();
+            return Some((pct as u8).min(100));
         }
     }
 
@@ -240,6 +243,8 @@ mod tests {
         assert_eq!(extract_percentage("Battery: 85%"), Some(85));
         assert_eq!(extract_percentage("100%"), Some(100));
         assert_eq!(extract_percentage("0%"), Some(0));
+        assert_eq!(extract_percentage("99.0%"), Some(99));
+        assert_eq!(extract_percentage("12.6%"), Some(13));
         assert_eq!(extract_percentage("4.0 GiB / 16.0 GiB"), Some(25));
         assert_eq!(extract_percentage("512 MiB / 1024 MiB"), Some(50));
         assert_eq!(extract_percentage("CPU: 45.2°C"), Some(45));

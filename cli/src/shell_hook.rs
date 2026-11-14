@@ -121,7 +121,8 @@ if status is-interactive
         set -g _rustfetch_startup 0
     end
     function _rustfetch_on_resize --on-signal WINCH
-        if test "$_rustfetch_startup" = "1" -a -z (commandline)
+        set -l _rf_cmd (commandline 2>/dev/null | string collect)
+        if test "$_rustfetch_startup" = "1" -a -z "$_rf_cmd"
             set -l cur_size (stty size 2>/dev/null)
             if test -n "$cur_size" -a "$cur_size" != "$_rustfetch_last_size"
                 set -g _rustfetch_last_size "$cur_size"
@@ -282,15 +283,15 @@ pub fn strip_rustfetch_hook(content: &str) -> String {
     let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
     let mut index = 0;
     while index < lines.len() {
-        if line_trimmed(lines[index]) == HOOK_START_MARKER {
-            if let Some(relative_end) = find_marker_end(&lines[index + 1..]) {
-                index += relative_end + 2;
-                drop_previous_blank(&mut kept);
-                continue;
-            }
-            // Unpaired start marker: keep it, never delete user content on a
-            // best guess.
+        if line_trimmed(lines[index]) == HOOK_START_MARKER
+            && let Some(relative_end) = find_marker_end(&lines[index + 1..])
+        {
+            index += relative_end + 2;
+            drop_previous_blank(&mut kept);
+            continue;
         }
+        // Unpaired start marker: keep it, never delete user content on a
+        // best guess.
         kept.push(lines[index]);
         index += 1;
     }
@@ -298,12 +299,12 @@ pub fn strip_rustfetch_hook(content: &str) -> String {
     let mut result: Vec<&str> = Vec::with_capacity(kept.len());
     let mut index = 0;
     while index < kept.len() {
-        if is_legacy_heading(kept[index]) {
-            if let Some(end) = legacy_block_end(&kept, index) {
-                index = end + 1;
-                drop_previous_blank(&mut result);
-                continue;
-            }
+        if is_legacy_heading(kept[index])
+            && let Some(end) = legacy_block_end(&kept, index)
+        {
+            index = end + 1;
+            drop_previous_blank(&mut result);
+            continue;
         }
         result.push(kept[index]);
         index += 1;
@@ -438,15 +439,15 @@ pub(crate) fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     }
     #[cfg(unix)]
     {
-        if let Ok(meta) = fs::metadata(path) {
-            if let Err(err) = fs::set_permissions(&temp, meta.permissions()) {
-                drop(file);
-                let _ = fs::remove_file(&temp);
-                return Err(format!(
-                    "Failed to preserve permissions for {}: {err}",
-                    path.display()
-                ));
-            }
+        if let Ok(meta) = fs::metadata(path)
+            && let Err(err) = fs::set_permissions(&temp, meta.permissions())
+        {
+            drop(file);
+            let _ = fs::remove_file(&temp);
+            return Err(format!(
+                "Failed to preserve permissions for {}: {err}",
+                path.display()
+            ));
         }
     }
     drop(file);
@@ -467,13 +468,16 @@ fn install_hook_at(target: &Path, shell: &str) -> Result<Option<PathBuf>, String
     let script = shell_init_script(shell)
         .ok_or_else(|| format!("Unsupported shell '{shell}'. Supported shells: bash, zsh, fish"))?;
     let existing = read_existing_utf8(target)?;
+    let cleaned = strip_rustfetch_hook(existing.as_deref().unwrap_or(""));
+    let content = compose_with_block(&cleaned, script);
+    if existing.as_deref() == Some(content.as_str()) {
+        return Ok(None);
+    }
     let backup = if existing.is_some() {
         backup_file(target)?
     } else {
         None
     };
-    let cleaned = strip_rustfetch_hook(existing.as_deref().unwrap_or(""));
-    let content = compose_with_block(&cleaned, script);
     write_atomic(target, &content)?;
     Ok(backup)
 }
@@ -662,7 +666,10 @@ alias ll='ls -la'
         assert!(first.contains("export A=1"));
 
         let backup2 = install_hook_at(&target, "bash").unwrap();
-        assert!(backup2.is_some());
+        assert!(
+            backup2.is_none(),
+            "unchanged reinstall must be a no-op without writing a duplicate backup"
+        );
         assert_eq!(read(&target), first, "second install must be a no-op");
         assert_eq!(
             backup_files(&dir).len(),
@@ -748,5 +755,30 @@ alias ll='ls -la'
         assert!(script.contains("BASH_VERSINFO"));
         assert!(script.contains("PROMPT_COMMAND+=(_rustfetch_prompt_cmd)"));
         assert!(script.contains("eval '_rf_ps1="));
+    }
+
+    #[test]
+    fn fish_hook_collects_commandline_without_quoting_literal() {
+        let script = shell_init_script("fish").unwrap();
+        assert!(!script.contains("\"(commandline)\""));
+        assert!(script.contains("set -l _rf_cmd (commandline 2>/dev/null | string collect)"));
+        assert!(script.contains("test \"$_rustfetch_startup\" = \"1\" -a -z \"$_rf_cmd\""));
+    }
+
+    #[test]
+    fn reinstalling_unchanged_hook_skips_backup_and_rewrite() {
+        let dir = temp_dir("idempotent_noop");
+        let target = dir.join(".bashrc");
+        fs::write(&target, "export A=1\n").unwrap();
+
+        let first_backup = install_hook_at(&target, "bash").unwrap();
+        assert!(first_backup.is_some());
+        let first_count = backup_files(&dir).len();
+
+        let second_backup = install_hook_at(&target, "bash").unwrap();
+        assert!(second_backup.is_none());
+        assert_eq!(backup_files(&dir).len(), first_count);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -134,11 +134,7 @@ fn default_ramp(mode: ShadingMode) -> Vec<String> {
 }
 
 pub fn sanitize_finite(value: f32, fallback: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        fallback
-    }
+    if value.is_finite() { value } else { fallback }
 }
 
 pub fn sanitize_size_scale(value: f32) -> f32 {
@@ -264,24 +260,53 @@ impl Model3D {
                         }
                     }
                     if seq.ends_with('m') {
-                        if seq == "\x1b[0m" || seq == "\x1b[m" {
+                        if seq == "\x1b[0m" || seq == "\x1b[m" || seq == "\x1b[39m" {
                             cur_color = None;
                         } else {
                             let tc_seq = match seq.as_str() {
-                                "\x1b[34m" | "\x1b[1;34m" => "\x1b[38;2;41;168;224m".to_string(),
-                                "\x1b[37m" | "\x1b[1;37m" => "\x1b[38;2;255;255;255m".to_string(),
-                                "\x1b[35m" | "\x1b[1;35m" => "\x1b[38;2;254;122;230m".to_string(),
-                                "\x1b[36m" | "\x1b[1;36m" => "\x1b[38;2;23;147;209m".to_string(),
-                                "\x1b[31m" | "\x1b[1;31m" => "\x1b[38;2;239;68;68m".to_string(),
-                                "\x1b[32m" | "\x1b[1;32m" => "\x1b[38;2;34;197;94m".to_string(),
-                                "\x1b[33m" | "\x1b[1;33m" => "\x1b[38;2;234;179;8m".to_string(),
-                                "\x1b[96m" | "\x1b[1;96m" => "\x1b[38;2;51;162;230m".to_string(),
-                                "\x1b[94m" | "\x1b[1;94m" => "\x1b[38;2;60;130;246m".to_string(),
-                                "\x1b[95m" | "\x1b[1;95m" => "\x1b[38;2;254;122;230m".to_string(),
-                                "\x1b[97m" | "\x1b[1;97m" => "\x1b[38;2;255;255;255m".to_string(),
-                                _ => seq,
+                                "\x1b[34m" | "\x1b[1;34m" => {
+                                    Some("\x1b[38;2;41;168;224m".to_string())
+                                }
+                                "\x1b[37m" | "\x1b[1;37m" => {
+                                    Some("\x1b[38;2;255;255;255m".to_string())
+                                }
+                                "\x1b[35m" | "\x1b[1;35m" => {
+                                    Some("\x1b[38;2;254;122;230m".to_string())
+                                }
+                                "\x1b[36m" | "\x1b[1;36m" => {
+                                    Some("\x1b[38;2;23;147;209m".to_string())
+                                }
+                                "\x1b[31m" | "\x1b[1;31m" => {
+                                    Some("\x1b[38;2;239;68;68m".to_string())
+                                }
+                                "\x1b[32m" | "\x1b[1;32m" => {
+                                    Some("\x1b[38;2;34;197;94m".to_string())
+                                }
+                                "\x1b[33m" | "\x1b[1;33m" => {
+                                    Some("\x1b[38;2;234;179;8m".to_string())
+                                }
+                                "\x1b[96m" | "\x1b[1;96m" => {
+                                    Some("\x1b[38;2;51;162;230m".to_string())
+                                }
+                                "\x1b[94m" | "\x1b[1;94m" => {
+                                    Some("\x1b[38;2;60;130;246m".to_string())
+                                }
+                                "\x1b[95m" | "\x1b[1;95m" => {
+                                    Some("\x1b[38;2;254;122;230m".to_string())
+                                }
+                                "\x1b[97m" | "\x1b[1;97m" => {
+                                    Some("\x1b[38;2;255;255;255m".to_string())
+                                }
+                                _ if seq.starts_with("\x1b[38;2;")
+                                    || seq.starts_with("\x1b[38;5;") =>
+                                {
+                                    Some(seq)
+                                }
+                                _ => None,
                             };
-                            cur_color = Some(tc_seq);
+                            if let Some(color_seq) = tc_seq {
+                                cur_color = Some(color_seq);
+                            }
                         }
                     }
                     continue;
@@ -463,7 +488,7 @@ impl Model3D {
                             let (nx, ny, nz) = if k == 0 {
                                 (gnx[row][col], gny[row][col], -gnz[row][col])
                             } else if k == layers - 1 {
-                                (gnx[row][col], gny[row][col], gnz[row][col])
+                                (-gnx[row][col], gny[row][col], gnz[row][col])
                             } else {
                                 let mut ex = 0.0f32;
                                 let mut ey = 0.0f32;
@@ -758,8 +783,8 @@ impl Renderer3D {
             }
 
             let ooz = 1.0 / zc;
-            let xs = ((half_w + k1x2 * x2 * ooz) * sub_cols as f32) as i32;
-            let ys = ((y_center - k1 * y2 * ooz) * sub_rows as f32) as i32;
+            let xs = ((half_w + k1x2 * x2 * ooz) * sub_cols as f32).floor() as i32;
+            let ys = ((y_center - k1 * y2 * ooz) * sub_rows as f32).floor() as i32;
 
             if xs < 0 || xs >= total_sub_cols as i32 || ys < 0 || ys >= total_sub_rows as i32 {
                 continue;

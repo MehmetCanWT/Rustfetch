@@ -1,4 +1,4 @@
-use crate::proc::{run_with_timeout, OPTIONAL_SOURCE_TIMEOUT};
+use crate::proc::{OPTIONAL_SOURCE_TIMEOUT, run_with_timeout};
 use crate::{Info, Module};
 
 pub struct Media;

@@ -41,12 +41,16 @@ rustfetch --3d --frames 120
 | `--shading-mode <MODE>` | Enum | `ascii` | Sub-cell rasterization mode: `ascii`, `blocks`, `sextants`, `braille`, `dot`, `wireframe`, or `solid`. |
 | `--shading <CHARS>` | String | mode default | Custom shading character ramp (overrides the mode's built-in ramp). |
 | `--speed <FLOAT>` | Float | `1.0` | Angular rotation speed multiplier. |
+| `--rotate-x` | Bool | config (`true`) | Rotate around the X axis (passing only `--rotate-x` disables Y rotation). |
+| `--rotate-y` | Bool | config (`true`) | Rotate around the Y axis (passing only `--rotate-y` disables X rotation). |
 | `--depth <FLOAT>` | Float | `1.0` | Z-axis relief depth extrusion multiplier. |
 | `--size <FLOAT>` | Float | `1.0` | Scale multiplier of the rendered 3D model. |
 | `--frames <N>` | Integer | Infinite | Stop after N frames instead of continuous rotation. |
 | `--fps <FPS>` | Float | `30.0` | Target frame rate. |
 | `--width <COLS>` | Integer | Auto (42) | Width of 3D rendering canvas in terminal columns. |
 | `--hold` | Bool | `false` | Keep animation running without exiting on keypress. |
+| `--exit-on-key` | Bool | `true` | Exit the animation on the first keypress. |
+| `--infinite` | Bool | `false` | Loop indefinitely, overriding configured frame limits. |
 
 ---
 
@@ -115,10 +119,10 @@ The 3D pipeline executes the following stages on every frame:
    Samples vertices against a virtual directional light source using Lambertian diffuse shading plus Blinn-Phong specular highlights.
 5. **Authentic Dual-Tone TrueColor Distro Branding:**
    - **Arch:** Outer `#1793d1` (Cyan), Inner `#33a2e6` (Light Cyan)
-   - **Ubuntu:** Outer `#e95420` (Orange), Inner `#ff9e3b` (Gold)
-   - **Fedora:** Outer `#3c6eb4` (Blue), Inner `#294172` (Dark Blue)
-   - **Debian:** Outer `#d70a53` (Red), Inner `#ff5983` (Pink)
-   - **Gentoo:** Outer `#ba96e2` (Purple), Inner `#7d5ba6` (Deep Purple)
+   - **Ubuntu:** Outer `#e95420` (Orange), Inner `#ffffff` (White)
+   - **Fedora:** Outer `#29a8e0` (Blue), Inner `#ffffff` (White)
+   - **Debian:** Outer `#d70a53` (Red), Inner `#ffffff` (White)
+   - **Gentoo:** Outer `#fe7ae6` (Pink), Inner `#ffffff` (White)
 
 ---
 
