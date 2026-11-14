@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "rustfetch"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "clap",
  "clap_complete",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "rustfetch-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "libc",
  "serde",
@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "rustfetch-render"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "base64",
  "fast_image_resize",

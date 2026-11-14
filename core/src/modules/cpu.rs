@@ -86,9 +86,34 @@ pub fn parse_cpuinfo(content: &str) -> Option<String> {
     parse_cpuinfo_fields(content).map(|info| format!("{} ({})", info.model, info.threads))
 }
 
+/// Strips a trailing base clock like ` @ 2.70GHz` from a CPU model string when
+/// a measured boost clock will be appended, avoiding duplicate `@ ... GHz` suffixes.
+fn strip_trailing_base_clock(model: &str) -> &str {
+    if let Some((prefix, suffix)) = model.rsplit_once(" @ ") {
+        let lower = suffix.trim().to_ascii_lowercase();
+        if (lower.ends_with("ghz") || lower.ends_with("mhz"))
+            && lower
+                .trim_end_matches("ghz")
+                .trim_end_matches("mhz")
+                .trim()
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.')
+        {
+            return prefix.trim_end();
+        }
+    }
+    model
+}
+
 /// Formats the CPU row, appending the maximum (boost) clock when available.
 pub fn format_cpu(info: &CpuInfo, boost_mhz: Option<u64>) -> String {
-    let mut value = format!("{} ({})", info.model, info.threads);
+    let has_boost = boost_mhz.is_some_and(|mhz| mhz > 0);
+    let model = if has_boost {
+        strip_trailing_base_clock(&info.model)
+    } else {
+        info.model.as_str()
+    };
+    let mut value = format!("{model} ({})", info.threads);
     if let Some(mhz) = boost_mhz.filter(|mhz| *mhz > 0) {
         value.push_str(&format!(" @ {:.2} GHz", mhz as f64 / 1000.0));
     }
@@ -213,6 +238,19 @@ cpu cores\t: 8
         );
         assert_eq!(format_cpu(&info, None), "AMD Ryzen 7 5800X (16)");
         assert_eq!(format_cpu(&info, Some(0)), "AMD Ryzen 7 5800X (16)");
+
+        let intel_info = CpuInfo {
+            model: "11th Gen Intel(R) Core(TM) i5-11400H @ 2.70GHz".to_string(),
+            threads: 12,
+        };
+        assert_eq!(
+            format_cpu(&intel_info, Some(4500)),
+            "11th Gen Intel(R) Core(TM) i5-11400H (12) @ 4.50 GHz"
+        );
+        assert_eq!(
+            format_cpu(&intel_info, None),
+            "11th Gen Intel(R) Core(TM) i5-11400H @ 2.70GHz (12)"
+        );
     }
 
     #[test]

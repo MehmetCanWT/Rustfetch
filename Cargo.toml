@@ -3,7 +3,7 @@ members = ["core", "render", "cli"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 authors = ["MehmetCanWT"]
 edition = "2024"
 # Minimum supported Rust version, enforced by the dedicated MSRV CI job and

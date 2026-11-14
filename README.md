@@ -1,30 +1,60 @@
 <div align="center">
 
-# RustFetch (`rfetch`)
+# 🦀 RustFetch (`rfetch`)
 
-**Linux system fetch and hardware telemetry tool written in pure Rust.**
+**Linux system fetch & hardware telemetry tool written in pure Rust.**
 
-[![CI](https://github.com/MehmetCanWT/rustfetch/actions/workflows/ci.yml/badge.svg)](https://github.com/MehmetCanWT/rustfetch/actions/workflows/ci.yml)
+[![CI](https://github.com/MehmetCanWT/Rustfetch/actions/workflows/ci.yml/badge.svg)](https://github.com/MehmetCanWT/Rustfetch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange.svg)](https://github.com/MehmetCanWT/rustfetch)
+[![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange.svg)](https://github.com/MehmetCanWT/Rustfetch)
 
 </div>
 
 ---
 
-## Overview
+## 🚀 Installation
 
-**RustFetch** (`rustfetch` / `rfetch`) is a Linux system information and hardware telemetry tool built in Rust Edition 2024 as a modular workspace (`core`, `render`, `cli`).
+### One-Line Installer (`install.sh`)
 
-- **Kernel Telemetry Without Shell Subprocesses**: Core hardware and OS metrics are read directly from `/proc`, `/sys/bus/pci/devices`, `/sys/class/drm` (pure-Rust EDID binary parser), `/sys/class/hwmon`, `/sys/class/power_supply`, and `statx`/`statvfs` syscalls. Optional collectors without a kernel interface (`rpm`, `curl`, `wpctl`, `nmcli`, `bluetoothctl`, `playerctl`) are timeout-bounded and skipped if unavailable.
-- **Terminal Graphics and Resize Stability**: Supports Kitty (`U=1` Unicode placeholders on Kitty, Ghostty, and WezTerm so graphics reflow inside grid cells on window resize), DEC Sixel, iTerm2 inline images, Unicode Braille, and 24-bit TrueColor ANSI half-blocks. Side-by-side image heights clamp automatically to match the card height (`12..=24` rows), animated GIFs stream frame-by-frame without buffering cloned canvases, and dominant accents / 16-color palettes are cached to `.color` sidecars.
-- **3D ASCII Engine (`--3d`)**: Extrudes built-in distro logos, custom ASCII art, or `.obj` models into a 3D mesh with Blinn-Phong lighting and `ascii`, `blocks`, `sextants`, `braille`, `dot`, `wireframe`, or `solid` shading. Pressing any key drops cleanly back to the static 2D logo without swallowing keystrokes.
-- **Live Monitor (`--live`) and TUI Configurator (`--setup`)**: Real-time CPU/memory Unicode sparklines with interactive theme (`[t]`), border (`[b]`), and in-place self-update (`[u]`) controls, plus `--setup` to edit settings with automatic `.bak` backups.
-- **Non-Destructive Updates and Shell Resize Sync**: Checks both GitHub Releases and upstream `main` `Cargo.toml` for newer semver versions (6h cache TTL, OSC 8 clickable links, cat-breed codenames) and updates in place via `--self-update` (`--update`) without touching `~/.config/rustfetch/config.toml`. Shell hooks (`--install-hook`) support Bash, Zsh, and Fish `SIGWINCH` redraws.
+Detects your Linux distribution (`arch`, `fedora`, `bazzite`/`rpm-ostree`, `debian`/`ubuntu`, `nixos`, `opensuse`, `alpine`, `void`), builds `rustfetch` and `rfetch`, and installs binaries, man page, shell completions (`bash`, `zsh`, `fish`), and optional shell hooks:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MehmetCanWT/Rustfetch/main/install.sh | bash
+```
+
+Optional environment variables:
+- `NONINTERACTIVE=1` — skip prompts and use defaults.
+- `RUSTFETCH_FORCE_CONFIG=0` — preserve any existing `~/.config/rustfetch/config.toml` (default during updates).
+- `RUSTFETCH_INSTALL_DIR=<DIR>` — override the target binary directory.
+- `RUSTFETCH_VERSION=<TAG>` — build a specific tag/branch (falls back to `main` if the tag is absent).
+
+### Build From Source (`cargo`)
+
+Requires Rust **1.88+** (`edition = "2024"`, `resolver = "3"`):
+
+```bash
+git clone https://github.com/MehmetCanWT/Rustfetch.git
+cd Rustfetch
+cargo build --workspace --release --locked
+install -Dm755 target/release/rustfetch ~/.local/bin/rustfetch
+install -Dm755 target/release/rfetch ~/.local/bin/rfetch
+```
 
 ---
 
-## Showcase
+## ✨ Overview
+
+**RustFetch** (`rustfetch` / `rfetch`) is a Linux system information and hardware telemetry tool built in Rust Edition 2024 as a modular workspace (`core`, `render`, `cli`).
+
+- ⚡ **Kernel Telemetry Without Shell Subprocesses**: Reads hardware and OS metrics directly from `/proc`, `/sys/bus/pci/devices`, `/sys/class/drm` (pure-Rust EDID binary parser), `/sys/class/hwmon`, `/sys/class/power_supply`, and `statx`/`statvfs` syscalls. Optional collectors without a kernel interface (`rpm`, `curl`, `wpctl`, `nmcli`, `bluetoothctl`, `playerctl`) are timeout-bounded and skipped if unavailable.
+- 🖼️ **Terminal Graphics & Resize Stability**: Supports Kitty (`U=1` Unicode placeholders on Kitty, Ghostty, and WezTerm so graphics stay anchored inside grid cells on resize), DEC Sixel, iTerm2 inline images, Unicode Braille, and 24-bit TrueColor ANSI half-blocks. Side-by-side image heights clamp automatically to match the card (`12..=24` rows), animated GIFs stream frame-by-frame without buffering cloned canvases, and dominant accents / 16-color palettes are cached to `.color` sidecars.
+- 🧊 **3D ASCII Engine (`--3d`)**: Extrudes built-in distro logos, custom ASCII art, or `.obj` models into a 3D mesh with Blinn-Phong lighting and `ascii`, `blocks`, `sextants`, `braille`, `dot`, `wireframe`, or `solid` shading. Pressing any key drops cleanly back to the static 2D logo without eating keystrokes.
+- 📈 **Live Monitor (`--live`) & TUI Configurator (`--setup`)**: Real-time CPU/memory Unicode sparklines with interactive theme (`[t]`), border (`[b]`), and in-place self-update (`[u]`) controls, plus `--setup` to edit settings with automatic `.bak` backups.
+- 🛡️ **Non-Destructive Updates & Shell Resize Sync**: Checks both GitHub Releases and upstream `main` `Cargo.toml` for newer semver versions (6h cache TTL, OSC 8 clickable links, cat-breed codenames) and updates in place via `--self-update` (`--update`) without touching `~/.config/rustfetch/config.toml`. Shell hooks (`--install-hook`) support Bash, Zsh, and Fish `SIGWINCH` redraws.
+
+---
+
+## 📸 Showcase
 
 ### Example Configurations
 
@@ -44,37 +74,7 @@
 
 ---
 
-## Installation
-
-### One-Line Installer (`install.sh`)
-
-Detects your Linux distribution (`arch`, `fedora`, `bazzite`/`rpm-ostree`, `debian`/`ubuntu`, `nixos`, `opensuse`, `alpine`, `void`), builds `rustfetch` and `rfetch`, and installs binaries, man page, shell completions (`bash`, `zsh`, `fish`), and optional shell hooks:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MehmetCanWT/rustfetch/main/install.sh | bash
-```
-
-Optional environment variables:
-- `NONINTERACTIVE=1`: skip prompts and use defaults.
-- `RUSTFETCH_FORCE_CONFIG=0`: preserve any existing `~/.config/rustfetch/config.toml` (also default in non-interactive updates).
-- `RUSTFETCH_INSTALL_DIR=<DIR>`: override target binary directory.
-- `RUSTFETCH_VERSION=<TAG>`: build a specific tag/branch (falls back to `main` if the tag is absent).
-
-### Build From Source (`cargo`)
-
-Requires Rust **1.88+** (`edition = "2024"`, `resolver = "3"`):
-
-```bash
-git clone https://github.com/MehmetCanWT/rustfetch.git
-cd rustfetch
-cargo build --workspace --release --locked
-install -Dm755 target/release/rustfetch ~/.local/bin/rustfetch
-install -Dm755 target/release/rfetch ~/.local/bin/rfetch
-```
-
----
-
-## Quick Start
+## ⚡ Quick Start
 
 Both `rustfetch` and `rfetch` share identical flags:
 
@@ -85,7 +85,7 @@ rustfetch
 # Interactive TUI configuration builder
 rustfetch --setup
 
-# System, terminal graphics protocol, config validity, cache, and update diagnostics
+# System, graphics protocol, config validity, cache, and update diagnostics
 rustfetch --doctor
 rustfetch --doctor --no-update-check
 
@@ -122,7 +122,7 @@ rustfetch --benchmark
 
 ---
 
-## Telemetry Modules (39 Collectors)
+## 📊 Telemetry Modules (39 Collectors)
 
 Run `rustfetch --list-modules` to list all canonical module names. Full options are covered in [docs/08-modules-and-icons.md](docs/08-modules-and-icons.md).
 
@@ -140,7 +140,7 @@ Run `rustfetch --list-modules` to list all canonical module names. Full options 
 | `font` | Font | KDE `kdeglobals` or GTK 3/4 `settings.ini` |
 | `display` | Display | `/sys/class/drm` pure-Rust EDID parser (header, checksum, timing descriptors, CTA-861) |
 | `terminal` | Terminal | Parent-process and env detection (`kitty`, `ghostty`, `foot`, `wezterm`, `alacritty`, etc.) |
-| `cpu` | CPU | `/proc/cpuinfo` model name and logical threads |
+| `cpu` | CPU | `/proc/cpuinfo` model name, logical threads, and boost clock |
 | `cpu_usage` | CPU Usage | `/proc/stat` utilization percentage |
 | `temp` | Temp | `/sys/class/hwmon` and `/sys/class/thermal` |
 | `gpu` | GPU | Priority dGPU with iGPU fallback (`type = "dgpu"` / `"igpu"` / `"all"`) |
@@ -169,7 +169,7 @@ Run `rustfetch --list-modules` to list all canonical module names. Full options 
 
 ---
 
-## Configuration (`~/.config/rustfetch/config.toml`)
+## ⚙️ Configuration (`~/.config/rustfetch/config.toml`)
 
 RustFetch only writes `~/.config/rustfetch/config.toml` when no config file exists, and preserves user configs on upgrades. Fastfetch configs can be converted with `rustfetch --import-fastfetch`.
 
@@ -250,7 +250,7 @@ name = "update"
 
 ---
 
-## Documentation (`docs/`)
+## 📚 Documentation (`docs/`)
 
 | Guide | Topic |
 | :--- | :--- |
@@ -266,7 +266,7 @@ name = "update"
 
 ---
 
-## Workspace Structure & Development
+## 🛠️ Workspace & Development
 
 ```text
 rustfetch/
@@ -292,6 +292,6 @@ make test-cli
 
 ---
 
-## License
+## 📄 License
 
 Licensed under the [MIT License](LICENSE).
