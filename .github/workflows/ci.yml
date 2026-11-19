@@ -35,15 +35,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
     - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       with:
         components: clippy, rustfmt
 
     - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
     - name: Format Check
       run: cargo fmt --all -- --check
@@ -62,13 +62,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
     - name: Set up Rust 1.88 (workspace rust-version)
-      uses: dtolnay/rust-toolchain@1.88.0
+      uses: dtolnay/rust-toolchain@5445741acf05630efa19e221cc588ebe0842b13d # 1.88.0
 
     - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
     - name: Check MSRV
       # Every dependency and every workspace member must build on the declared
@@ -80,11 +80,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
     - name: cargo deny check
       # Validates advisories, licenses, bans and sources from deny.toml.
-      uses: EmbarkStudios/cargo-deny-action@v2
+      uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
       with:
         command: check
         arguments: --all-features
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
     - name: Install ShellCheck
       run: |
@@ -110,4 +110,4 @@ jobs:
       # Lints the workflow YAML itself (syntax, expressions, known action inputs).
       # ShellCheck integration is disabled here because shell style is enforced
       # by the dedicated ShellCheck step above.
-      run: docker run --rm -v "$PWD:/repo" -w /repo --network none rhysd/actionlint:latest -color -shellcheck=
+      run: docker run --rm -v "$PWD:/repo" -w /repo --network none rhysd/actionlint:1.7.9 -color -shellcheck=

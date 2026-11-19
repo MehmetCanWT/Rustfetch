@@ -1,7 +1,26 @@
 use crate::logos;
+use crate::tui_live::{TuiPalette, ansi_to_ratatui_line, border_type_from_style};
+use crossterm::{
+    cursor::{MoveTo, Show},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    execute,
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
+};
+use ratatui::{
+    Frame, Terminal,
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+};
 use rustfetch_core::config::Config;
-use std::io::Write;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub(super) fn theme_choices() -> Vec<String> {
     let names = rustfetch_render::theme_names();
@@ -40,32 +59,284 @@ pub(super) fn save_config(config: &Config, path: &Path) -> Result<Option<PathBuf
     Ok(backup)
 }
 
-pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> {
-    use crossterm::{
-        cursor::{Hide, MoveTo, Show},
-        event::{Event, KeyCode, KeyModifiers, read},
-        execute, queue,
-        terminal::{
-            Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-            enable_raw_mode,
-        },
-    };
-    use std::io::IsTerminal;
+struct SetupGuard;
 
-    let mut stdout = std::io::stdout();
-    if !stdout.is_terminal() || !std::io::stdin().is_terminal() {
+impl Drop for SetupGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+    }
+}
+
+fn setup_items(config: &Config) -> [(&'static str, String); 8] {
+    let theme_value = config.general.theme.as_deref().unwrap_or("none");
+    let border_style_value = config.general.border_style.as_deref().unwrap_or("rounded");
+    let on_off = |enabled: bool| if enabled { "Enabled" } else { "Disabled" }.to_string();
+    [
+        ("Color Theme", theme_value.to_string()),
+        ("Logo / Mascot", config.general.logo.distro.clone()),
+        (
+            "Display Mode",
+            if config.general.logo.three_d.enabled {
+                "3D Animated".to_string()
+            } else {
+                "Standard 2D".to_string()
+            },
+        ),
+        ("Outer Border Box", on_off(config.general.border)),
+        ("Border Style", border_style_value.to_string()),
+        ("Nerd Font Icons", on_off(config.general.icons)),
+        ("Center Output", on_off(config.general.center)),
+        ("GitHub Update Check", on_off(config.general.check_updates)),
+    ]
+}
+
+fn render_setup_frame(
+    frame: &mut Frame<'_>,
+    config: &Config,
+    selected_row: usize,
+    status_msg: &str,
+) {
+    let area = frame.area();
+    let palette = TuiPalette::resolve(config.general.theme.as_deref(), None);
+    let border_type = border_type_from_style(config.general.border_style.as_deref());
+
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
+        .split(area);
+
+    // Header
+    let header_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(border_type)
+        .border_style(Style::default().fg(palette.border));
+    let header_text = Line::from(vec![
+        Span::styled(
+            " RustFetch Interactive Configuration Wizard (--setup) ",
+            Style::default()
+                .fg(palette.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " • Existing config backed up to .bak on save",
+            Style::default().fg(palette.muted),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(header_text)
+            .block(header_block)
+            .alignment(Alignment::Center),
+        root[0],
+    );
+
+    // Body: Settings (left) + Live Preview (right) on wide screens, stacked on narrow screens
+    if root[1].width >= 72 {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+            .split(root[1]);
+        render_settings_list(frame, cols[0], config, selected_row, palette, border_type);
+        render_preview_pane(frame, cols[1], config, palette, border_type);
+    } else {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(root[1]);
+        render_settings_list(frame, rows[0], config, selected_row, palette, border_type);
+        render_preview_pane(frame, rows[1], config, palette, border_type);
+    }
+
+    // Footer: status + keybinds
+    let footer_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(root[2]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ℹ ", Style::default().fg(palette.primary)),
+            Span::styled(status_msg, Style::default().fg(palette.fg)),
+        ])),
+        footer_rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " [↑/↓ j/k]",
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Select  ", Style::default().fg(palette.muted)),
+            Span::styled(
+                "[←/→ Enter]",
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Change  ", Style::default().fg(palette.muted)),
+            Span::styled(
+                "[s]",
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Save  ", Style::default().fg(palette.muted)),
+            Span::styled(
+                "[q]",
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Quit", Style::default().fg(palette.muted)),
+        ])),
+        footer_rows[1],
+    );
+}
+
+fn render_settings_list(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    config: &Config,
+    selected_row: usize,
+    palette: TuiPalette,
+    border_type: ratatui::widgets::BorderType,
+) {
+    let items_data = setup_items(config);
+    let list_items: Vec<ListItem<'static>> = items_data
+        .iter()
+        .enumerate()
+        .map(|(idx, (label, value))| {
+            let is_sel = idx == selected_row;
+            let prefix = if is_sel { " ❯ " } else { "   " };
+            let val_text = if is_sel {
+                format!("◀ {value} ▶")
+            } else {
+                value.clone()
+            };
+            let label_style = if is_sel {
+                Style::default()
+                    .fg(palette.primary)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.fg)
+            };
+            let val_style = if is_sel {
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.muted)
+            };
+            let line = Line::from(vec![
+                Span::styled(prefix, label_style),
+                Span::styled(format!("{}. {:<22}", idx + 1, label), label_style),
+                Span::styled(val_text, val_style),
+            ]);
+            let item = ListItem::new(line);
+            if is_sel {
+                item.style(Style::default().bg(palette.highlight_bg))
+            } else {
+                item
+            }
+        })
+        .collect();
+
+    let block = Block::default()
+        .title(" Settings ")
+        .borders(Borders::ALL)
+        .border_type(border_type)
+        .border_style(Style::default().fg(palette.border));
+    let mut state = ListState::default();
+    state.select(Some(selected_row));
+    frame.render_stateful_widget(List::new(list_items).block(block), area, &mut state);
+}
+
+fn render_preview_pane(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    config: &Config,
+    palette: TuiPalette,
+    border_type: ratatui::widgets::BorderType,
+) {
+    let title = format!(" Live Preview ({}) ", config.general.logo.distro);
+    let block = Block::default()
+        .title(title)
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(border_type)
+        .border_style(Style::default().fg(if config.general.border {
+            palette.border
+        } else {
+            palette.muted
+        }));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.width < 4 || inner.height < 2 {
+        return;
+    }
+
+    let preview_logo = logos::get_logo(if config.general.logo.distro == "auto" {
+        "cat"
+    } else {
+        &config.general.logo.distro
+    });
+    let max_logo_rows = inner.height.saturating_sub(4).max(4) as usize;
+    let mut lines: Vec<Line<'static>> = preview_logo
+        .colored_lines()
+        .into_iter()
+        .take(max_logo_rows)
+        .map(|l| ansi_to_ratatui_line(&l))
+        .collect();
+
+    lines.push(Line::raw(""));
+    let icon_os = if config.general.icons { "󰣇 " } else { "" };
+    let mode_tag = if config.general.logo.three_d.enabled {
+        "3D Animated"
+    } else {
+        "2D Standard"
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{icon_os}Theme: "),
+            Style::default()
+                .fg(palette.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            config
+                .general
+                .theme
+                .as_deref()
+                .unwrap_or("none")
+                .to_string(),
+            Style::default().fg(palette.accent),
+        ),
+        Span::styled(
+            format!("  •  {mode_tag}"),
+            Style::default().fg(palette.muted),
+        ),
+    ]));
+
+    let align = if config.general.center {
+        Alignment::Center
+    } else {
+        Alignment::Left
+    };
+    frame.render_widget(Paragraph::new(lines).alignment(align), inner);
+}
+
+pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> {
+    if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
         return Err(
             "Interactive setup (--setup / --tui) requires an interactive terminal (TTY)"
                 .to_string(),
         );
-    }
-
-    struct SetupGuard;
-    impl Drop for SetupGuard {
-        fn drop(&mut self) {
-            let _ = disable_raw_mode();
-            let _ = execute!(std::io::stdout(), Show, LeaveAlternateScreen);
-        }
     }
 
     let mut config = config.clone();
@@ -81,125 +352,40 @@ pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> 
     }
 
     crate::install_terminal_panic_hook();
-    if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
+    enable_raw_mode().map_err(|e| format!("Failed to enable raw mode: {e}"))?;
+    let mut stdout = io::stdout();
+    if let Err(error) = execute!(
+        stdout,
+        EnterAlternateScreen,
+        Clear(ClearType::All),
+        MoveTo(0, 0)
+    ) {
+        let _ = disable_raw_mode();
         return Err(format!("Failed to enter the alternate screen: {error}"));
-    }
-    if let Err(error) = enable_raw_mode() {
-        let _ = execute!(stdout, Show, LeaveAlternateScreen);
-        return Err(format!("Failed to enable raw mode: {error}"));
     }
     let _guard = SetupGuard;
 
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal =
+        Terminal::new(backend).map_err(|e| format!("Failed to initialize TUI terminal: {e}"))?;
+
+    let item_count = 8_usize;
     let mut selected_row = 0_usize;
     let mut status_msg = String::from(
-        "Use Up/Down to select, Left/Right or Enter to toggle, [S] to Save, [Q] to Quit. Configuration comments are NOT preserved on save.",
+        "Comments/key order are not preserved on save; a .bak backup is created automatically.",
     );
 
     loop {
-        let _ = queue!(stdout, Clear(ClearType::All), MoveTo(0, 0));
-
-        let theme_value = config.general.theme.as_deref().unwrap_or("none");
-        let border_style_value = config.general.border_style.as_deref().unwrap_or("rounded");
-        let mode_3d = config.general.logo.three_d.enabled;
-
-        let items = [
-            ("1. Color Theme", theme_value.to_string()),
-            ("2. Logo / Mascot", config.general.logo.distro.clone()),
-            (
-                "3. Display Mode",
-                if mode_3d {
-                    "3D Animated".to_string()
-                } else {
-                    "Standard 2D".to_string()
-                },
-            ),
-            (
-                "4. Outer Border Box",
-                if config.general.border {
-                    "Enabled"
-                } else {
-                    "Disabled"
-                }
-                .to_string(),
-            ),
-            ("5. Border Style", border_style_value.to_string()),
-            (
-                "6. Nerd Font Icons",
-                if config.general.icons {
-                    "Enabled"
-                } else {
-                    "Disabled"
-                }
-                .to_string(),
-            ),
-            (
-                "7. Center Output",
-                if config.general.center {
-                    "Enabled"
-                } else {
-                    "Disabled"
-                }
-                .to_string(),
-            ),
-            (
-                "8. GitHub Update Check",
-                if config.general.check_updates {
-                    "Enabled"
-                } else {
-                    "Disabled"
-                }
-                .to_string(),
-            ),
-        ];
-        let item_count = items.len();
-
-        print!(
-            "  \x1b[1;36m╭──────────────────────────────────────────────────────────────╮\x1b[0m\r\n"
-        );
-        print!(
-            "  \x1b[1;36m│\x1b[0m  \x1b[1mRustFetch Interactive Configuration Wizard (--setup)\x1b[0m        \x1b[1;36m│\x1b[0m\r\n"
-        );
-        print!(
-            "  \x1b[1;36m│\x1b[0m  \x1b[2mExisting settings are preserved; a .bak backup is kept.\x1b[0m   \x1b[1;36m│\x1b[0m\r\n"
-        );
-        print!(
-            "  \x1b[1;36m│\x1b[0m  \x1b[2mComments/key order are not preserved; back up manually if needed.\x1b[0m \x1b[1;36m│\x1b[0m\r\n"
-        );
-        print!(
-            "  \x1b[1;36m╰──────────────────────────────────────────────────────────────╯\x1b[0m\r\n\r\n"
-        );
-
-        for (index, (label, value)) in items.iter().enumerate() {
-            if index == selected_row {
-                print!("  \x1b[1;32m❯ {label:<30}\x1b[0m \x1b[1;33m◀ {value} ▶\x1b[0m\r\n");
-            } else {
-                print!("    {label:<30} \x1b[2m{value}\x1b[0m\r\n");
-            }
-        }
-
-        let preview_logo = logos::get_logo(if config.general.logo.distro == "auto" {
-            "cat"
-        } else {
-            &config.general.logo.distro
-        });
-        let preview_lines = preview_logo.colored_lines();
-        print!(
-            "\r\n  \x1b[1mLive Logo Preview ({}):\x1b[0m\r\n",
-            config.general.logo.distro
-        );
-        for line in preview_lines.iter().take(8) {
-            print!("    {line}\r\n");
-        }
-
-        print!("\r\n  \x1b[36mℹ\x1b[0m {status_msg}\r\n");
-        let _ = stdout.flush();
+        terminal
+            .draw(|f| render_setup_frame(f, &config, selected_row, &status_msg))
+            .map_err(|e| format!("Failed to draw setup TUI: {e}"))?;
 
         let event = loop {
             if crate::terminate_requested() {
                 return Ok(());
             }
-            match crossterm::event::poll(std::time::Duration::from_millis(100)) {
-                Ok(true) => match read() {
+            match event::poll(Duration::from_millis(100)) {
+                Ok(true) => match event::read() {
                     Ok(ev) => break ev,
                     Err(_) => return Ok(()),
                 },
@@ -207,9 +393,17 @@ pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> 
                 Err(_) => return Ok(()),
             }
         };
+
         let Event::Key(key) = event else {
+            if matches!(event, Event::Resize(_, _)) {
+                let _ = terminal.clear();
+            }
             continue;
         };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => return Ok(()),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
@@ -237,13 +431,7 @@ pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> 
                             .iter()
                             .position(|theme| theme == current)
                             .unwrap_or(0);
-                        let next = if forward {
-                            (position + 1) % themes.len()
-                        } else if position == 0 {
-                            themes.len() - 1
-                        } else {
-                            position - 1
-                        };
+                        let next = cycle_index(position, themes.len(), forward);
                         config.general.theme = if themes[next] == "none" {
                             None
                         } else {
@@ -256,13 +444,7 @@ pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> 
                             .iter()
                             .position(|logo| *logo == current)
                             .unwrap_or(0);
-                        let next = if forward {
-                            (position + 1) % logos_list.len()
-                        } else if position == 0 {
-                            logos_list.len() - 1
-                        } else {
-                            position - 1
-                        };
+                        let next = cycle_index(position, logos_list.len(), forward);
                         config.general.logo.distro = logos_list[next].to_string();
                     }
                     2 => {
@@ -277,13 +459,7 @@ pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> 
                             .iter()
                             .position(|style| *style == current)
                             .unwrap_or(0);
-                        let next = if forward {
-                            (position + 1) % border_styles.len()
-                        } else if position == 0 {
-                            border_styles.len() - 1
-                        } else {
-                            position - 1
-                        };
+                        let next = cycle_index(position, border_styles.len(), forward);
                         config.general.border_style = Some(border_styles[next].to_string());
                     }
                     5 => {
@@ -302,14 +478,11 @@ pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> 
                 Ok(backup) => {
                     status_msg = match backup {
                         Some(backup) => format!(
-                            "✓ Saved to {} (backup: {}); note: comments are not preserved.",
+                            "✓ Saved to {} (backup: {})",
                             config_path.display(),
                             backup.display()
                         ),
-                        None => format!(
-                            "✓ Saved to {}; note: comments are not preserved.",
-                            config_path.display()
-                        ),
+                        None => format!("✓ Saved to {}", config_path.display()),
                     };
                 }
                 Err(error) => {
@@ -317,6 +490,51 @@ pub fn run_setup_tui(config: &Config, config_path: &Path) -> Result<(), String> 
                 }
             },
             _ => {}
+        }
+    }
+}
+
+fn cycle_index(position: usize, len: usize, forward: bool) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    if forward {
+        (position + 1) % len
+    } else if position == 0 {
+        len - 1
+    } else {
+        position - 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn setup_tui_renders_cleanly_at_wide_and_narrow_sizes() {
+        let config = Config::default();
+        for (w, h) in [(110, 28), (60, 22)] {
+            let backend = TestBackend::new(w, h);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            terminal
+                .draw(|f| render_setup_frame(f, &config, 0, "Ready"))
+                .expect("render setup frame");
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(text.contains("Settings"), "missing Settings at {w}x{h}");
+            assert!(
+                text.contains("Live Preview"),
+                "missing Live Preview at {w}x{h}"
+            );
+            assert!(text.contains("Color Theme"), "missing items at {w}x{h}");
+            assert!(text.contains("Ready"), "missing status bar at {w}x{h}");
         }
     }
 }

@@ -381,6 +381,69 @@ pub fn render_kitty_placeholder(
     }
 }
 
+/// Renders a static image or animated GIF centered inside a 0-based terminal
+/// rectangle `(x_col, y_row, max_cols, max_rows)` using Kitty graphics with
+/// `C=1` (cursor does not move), saving and restoring the cursor position.
+/// Designed for full-screen TUIs (`ratatui`) where the caller manages layout.
+pub fn render_kitty_in_rect(
+    path: &str,
+    x_col: u16,
+    y_row: u16,
+    max_cols: u16,
+    max_rows: u16,
+) -> Option<(usize, usize)> {
+    if max_cols < 2 || max_rows < 2 {
+        return None;
+    }
+    let prepared = prepare_kitty_image(path, max_cols as usize, Some(max_rows as usize))?;
+    let (cols, rows) = match &prepared {
+        PreparedKittyImage::Gif { cols, rows, .. }
+        | PreparedKittyImage::Static { cols, rows, .. } => (*cols, *rows),
+    };
+    let offset_x = (max_cols as usize).saturating_sub(cols) / 2;
+    let offset_y = (max_rows as usize).saturating_sub(rows) / 2;
+    let term_col = x_col as usize + offset_x + 1;
+    let term_row = y_row as usize + offset_y + 1;
+
+    kitty::clear_kitty_images();
+    print!("\x1b[s\x1b[{term_row};{term_col}H");
+    let _ = std::io::stdout().flush();
+
+    match prepared {
+        PreparedKittyImage::Gif {
+            cols,
+            rows,
+            px_w,
+            px_h,
+            frames,
+        } => {
+            let kitty_frames: Vec<_> = frames
+                .iter()
+                .map(|(buf, delay)| kitty::KittyFrame {
+                    rgba_data: buf,
+                    delay_ms: *delay,
+                })
+                .collect();
+            kitty::print_kitty_animation(&kitty_frames, px_w, px_h, cols as u32, rows as u32);
+            print!("\x1b[u");
+            let _ = std::io::stdout().flush();
+            Some((cols, rows))
+        }
+        PreparedKittyImage::Static {
+            cols,
+            rows,
+            px_w,
+            px_h,
+            rgba,
+        } => {
+            kitty::print_kitty_ex(&rgba, px_w, px_h, cols as u32, rows as u32, 0, true);
+            print!("\x1b[u");
+            let _ = std::io::stdout().flush();
+            Some((cols, rows))
+        }
+    }
+}
+
 pub(crate) fn fit_cell_dimensions(
     orig_w: u32,
     orig_h: u32,

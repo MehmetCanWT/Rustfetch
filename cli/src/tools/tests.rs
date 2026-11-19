@@ -13,6 +13,10 @@ fn temp_dir(tag: &str) -> PathBuf {
 #[test]
 fn test_validate_installer_script_checks_shebang_and_repo() {
     assert!(validate_installer_script("#!/usr/bin/env bash\nREPO=MehmetCanWT/rustfetch\n").is_ok());
+    assert!(validate_installer_script("#!/usr/bin/env bash\nREPO=MehmetCanWT/Rustfetch\n").is_ok());
+    assert!(
+        validate_installer_script("#!/usr/bin/env bash\nREPO=MehmetCanWT/rustfetch\0\n").is_err()
+    );
     assert!(validate_installer_script("").is_err());
     assert!(validate_installer_script("<html>404</html>").is_err());
     assert!(validate_installer_script("#!/bin/sh\necho hi\n").is_err());
@@ -91,6 +95,8 @@ fn test_curl_args_are_https_only_and_bounded() {
     );
     assert!(arguments.iter().any(|argument| argument == "--proto"));
     assert!(arguments.iter().any(|argument| argument == "=https"));
+    assert!(arguments.iter().any(|argument| argument == "--tlsv1.2"));
+    assert!(arguments.iter().any(|argument| argument == "--max-redirs"));
     assert!(arguments.contains(&MAX_SCRIPT_BYTES.to_string()));
     assert!(arguments.iter().any(|argument| argument == "--max-time"));
     assert!(

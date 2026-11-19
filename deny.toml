@@ -43,15 +43,14 @@ confidence-threshold = 0.8
 # legitimately coexist across major versions); switch to "deny" once the tree
 # is clean if strict deduplication is desired.
 multiple-versions = "warn"
-# Wildcard version requirements (e.g. `foo = "*"`) are allowed today; the
-# workspace pins concrete semver ranges, so this is informational only.
-wildcards = "allow"
+# Disallow wildcard version requirements so dependencies remain pinned.
+wildcards = "deny"
 highlight = "all"
 
 [sources]
 # Only crates.io and no git dependencies: anything else must be justified here
 # before it can be merged.
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []

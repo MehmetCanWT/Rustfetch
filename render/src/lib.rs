@@ -85,3 +85,18 @@ pub fn render_background_ex(path: &str, opts: &BackgroundOptions) -> Option<usiz
     }
     image::render_background_ex(path, opts)
 }
+
+/// Renders an image or GIF centered inside a 0-based terminal rectangle using
+/// Kitty graphics (`C=1`, cursor preserved) for full-screen TUIs (`ratatui`).
+pub fn render_kitty_in_rect(
+    path: &str,
+    x_col: u16,
+    y_row: u16,
+    max_cols: u16,
+    max_rows: u16,
+) -> Option<(usize, usize)> {
+    if !terminal::supports_kitty() {
+        return None;
+    }
+    image::render_kitty_in_rect(path, x_col, y_row, max_cols, max_rows)
+}

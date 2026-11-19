@@ -88,6 +88,7 @@ fi
 log "Detected target: ${TARGET_ARCH}-${LIBC}"
 
 TEMP_DIR="$(mktemp -d)"
+chmod 700 "$TEMP_DIR"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 ensure_build_tools() {
@@ -182,18 +183,22 @@ else
     fi
 
     if [ -n "${RUSTFETCH_VERSION:-}" ]; then
+        if ! [[ "$RUSTFETCH_VERSION" =~ ^[vV]?[0-9A-Za-z._-]+$ ]] || [[ "$RUSTFETCH_VERSION" == -* ]]; then
+            die "Invalid RUSTFETCH_VERSION '${RUSTFETCH_VERSION}': only alphanumeric characters, '.', '_', and '-' are allowed."
+        fi
         CLEAN_VERSION="${RUSTFETCH_VERSION#v}"
+        CLEAN_VERSION="${CLEAN_VERSION#V}"
         log "Fetching RustFetch source for '${RUSTFETCH_VERSION}' from ${GITHUB_URL}..."
         # Try explicit tag forms first; if no git tag exists yet, fall back to main.
-        if ! git clone --depth 1 --branch "v${CLEAN_VERSION}" "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null \
-            && ! git clone --depth 1 --branch "${CLEAN_VERSION}" "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null; then
+        if ! git clone --depth 1 --branch "v${CLEAN_VERSION}" -- "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null \
+            && ! git clone --depth 1 --branch "${CLEAN_VERSION}" -- "${GITHUB_URL}.git" "$SRC_DIR" 2>/dev/null; then
             warn "Tag '${RUSTFETCH_VERSION}' not found; building latest main branch instead."
             rm -rf "$SRC_DIR"
-            git clone --depth 1 "${GITHUB_URL}.git" "$SRC_DIR"
+            git clone --depth 1 -- "${GITHUB_URL}.git" "$SRC_DIR"
         fi
     else
         log "Fetching latest source code from ${GITHUB_URL}..."
-        git clone --depth 1 "${GITHUB_URL}.git" "$SRC_DIR"
+        git clone --depth 1 -- "${GITHUB_URL}.git" "$SRC_DIR"
     fi
 
     log "Compiling release binary (LTO optimized)..."
@@ -277,45 +282,45 @@ mkdir -p "$CONFIG_DIR/logos"
 # 6. Install shell completions
 log "Installing shell auto-completions..."
 RFETCH_BIN="$FINAL_BIN_DIR/rfetch"
+
+install_completion_atomic() {
+    local bin="$1" shell="$2" dst="$3" tmp
+    tmp="$(mktemp "${dst}.tmp.XXXXXX")" || return 1
+    if "$bin" --completions "$shell" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+        mv -f "$tmp" "$dst"
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
 BASH_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
 mkdir -p "$BASH_DIR"
-if "$INSTALLED_BIN" --completions bash > "$BASH_DIR/rustfetch.tmp" 2>/dev/null; then
-    mv -f "$BASH_DIR/rustfetch.tmp" "$BASH_DIR/rustfetch"
-    if [ -x "$RFETCH_BIN" ] && "$RFETCH_BIN" --completions bash > "$BASH_DIR/rfetch.tmp" 2>/dev/null; then
-        mv -f "$BASH_DIR/rfetch.tmp" "$BASH_DIR/rfetch"
-    else
-        rm -f "$BASH_DIR/rfetch.tmp"
+if install_completion_atomic "$INSTALLED_BIN" bash "$BASH_DIR/rustfetch"; then
+    if [ -x "$RFETCH_BIN" ]; then
+        install_completion_atomic "$RFETCH_BIN" bash "$BASH_DIR/rfetch" || true
     fi
 else
-    rm -f "$BASH_DIR/rustfetch.tmp"
     warn "Could not generate bash completions."
 fi
 
 ZSH_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
 mkdir -p "$ZSH_DIR"
-if "$INSTALLED_BIN" --completions zsh > "$ZSH_DIR/_rustfetch.tmp" 2>/dev/null; then
-    mv -f "$ZSH_DIR/_rustfetch.tmp" "$ZSH_DIR/_rustfetch"
-    if [ -x "$RFETCH_BIN" ] && "$RFETCH_BIN" --completions zsh > "$ZSH_DIR/_rfetch.tmp" 2>/dev/null; then
-        mv -f "$ZSH_DIR/_rfetch.tmp" "$ZSH_DIR/_rfetch"
-    else
-        rm -f "$ZSH_DIR/_rfetch.tmp"
+if install_completion_atomic "$INSTALLED_BIN" zsh "$ZSH_DIR/_rustfetch"; then
+    if [ -x "$RFETCH_BIN" ]; then
+        install_completion_atomic "$RFETCH_BIN" zsh "$ZSH_DIR/_rfetch" || true
     fi
 else
-    rm -f "$ZSH_DIR/_rustfetch.tmp"
     warn "Could not generate zsh completions."
 fi
 
 FISH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
 mkdir -p "$FISH_DIR"
-if "$INSTALLED_BIN" --completions fish > "$FISH_DIR/rustfetch.fish.tmp" 2>/dev/null; then
-    mv -f "$FISH_DIR/rustfetch.fish.tmp" "$FISH_DIR/rustfetch.fish"
-    if [ -x "$RFETCH_BIN" ] && "$RFETCH_BIN" --completions fish > "$FISH_DIR/rfetch.fish.tmp" 2>/dev/null; then
-        mv -f "$FISH_DIR/rfetch.fish.tmp" "$FISH_DIR/rfetch.fish"
-    else
-        rm -f "$FISH_DIR/rfetch.fish.tmp"
+if install_completion_atomic "$INSTALLED_BIN" fish "$FISH_DIR/rustfetch.fish"; then
+    if [ -x "$RFETCH_BIN" ]; then
+        install_completion_atomic "$RFETCH_BIN" fish "$FISH_DIR/rfetch.fish" || true
     fi
 else
-    rm -f "$FISH_DIR/rustfetch.fish.tmp"
     warn "Could not generate fish completions."
 fi
 

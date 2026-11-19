@@ -100,6 +100,9 @@ pub(super) fn curl_download_args(url: &str, destination: &Path, max_time: Durati
         "--location".to_string(),
         "--proto".to_string(),
         "=https".to_string(),
+        "--tlsv1.2".to_string(),
+        "--max-redirs".to_string(),
+        "5".to_string(),
         "--connect-timeout".to_string(),
         connect_timeout.as_secs().to_string(),
         "--max-time".to_string(),
@@ -132,6 +135,9 @@ fn download(url: &str, destination: &Path, timeout: Duration) -> Result<(), Stri
 }
 
 pub(super) fn validate_installer_script(content: &str) -> Result<(), String> {
+    if content.contains('\0') {
+        return Err("Downloaded installer script contains NUL bytes".to_string());
+    }
     let trimmed = content.trim_start();
     if trimmed.is_empty() {
         return Err("Downloaded installer script is empty".to_string());
@@ -141,7 +147,10 @@ pub(super) fn validate_installer_script(content: &str) -> Result<(), String> {
             "Downloaded file does not look like a shell script (missing shebang)".to_string(),
         );
     }
-    if !content.contains("MehmetCanWT/rustfetch") {
+    if !content
+        .to_ascii_lowercase()
+        .contains("mehmetcanwt/rustfetch")
+    {
         return Err("Downloaded installer script failed repository origin check".to_string());
     }
     Ok(())
@@ -165,7 +174,8 @@ pub(super) fn build_installer_command(
     install_dir: Option<&Path>,
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new("bash");
-    cmd.arg(script_path)
+    cmd.arg("--")
+        .arg(script_path)
         .env("NONINTERACTIVE", "1")
         .env("RUSTFETCH_FORCE_CONFIG", "0")
         .env("RUSTFETCH_VERSION", target_version);

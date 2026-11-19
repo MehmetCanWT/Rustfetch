@@ -7,6 +7,7 @@ mod logos;
 mod shell_hook;
 mod text;
 mod tools;
+mod tui_live;
 
 pub use image_picker::{
     default_logo_dir, fastfetch_logo_dir, filter_candidate_images, get_image_color_and_palette,
@@ -33,7 +34,8 @@ use args::Cli;
 pub use args::SHADING_MODES;
 #[cfg(test)]
 use args::{parse_shading_chars, parse_shading_mode, resolve_shading_chars};
-use interactive::{build_ascii_logo_block, run_3d, run_ascii_animation, run_live};
+use interactive::{build_ascii_logo_block, run_3d, run_ascii_animation};
+use tui_live::run_live_tui as run_live;
 
 pub(crate) fn resolve_distro_logo(distro_name: &str, padding: usize) -> logos::Logo {
     let logo = logos::get_logo(distro_name);
